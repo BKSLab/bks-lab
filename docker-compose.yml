@@ -1,0 +1,66 @@
+x-backend-runtime: &backend-runtime
+  build: ./backend
+  image: bks-lab-backend:dev
+  env_file: ./backend/.env
+  environment:
+    POSTGRES_HOST: db
+    POSTGRES_PORT: "5432"
+  volumes:
+    - ./backend:/app
+    - /app/.venv
+  networks: [bks-lab]
+
+services:
+  db:
+    image: postgres:16-alpine
+    env_file: ./backend/.env
+    restart: always
+    ports:
+      - "5434:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - bks-lab
+
+  backend:
+    <<: *backend-runtime
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    # dev: reload on mounted code changes
+    command: ["hypercorn", "main:app", "--bind", "0.0.0.0:8000", "--reload"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=4)"]
+      interval: 15s
+      timeout: 5s
+      start_period: 30s
+      retries: 10
+
+  news-analyzer-scheduler:
+    <<: *backend-runtime
+    restart: unless-stopped
+    # Only the API entrypoint migrates; its healthcheck gates worker startup.
+    entrypoint: ["python", "-m", "src.background_tasks.news_scheduler"]
+    command: []
+    depends_on:
+      backend: {condition: service_healthy}
+    stop_grace_period: 45s
+    healthcheck:
+      test: ["CMD", "python", "-m", "src.background_tasks.news_health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+
+volumes:
+  pg_data:
+
+networks:
+  bks-lab:

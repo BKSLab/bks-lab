@@ -1,0 +1,11 @@
+include /etc/nginx/snippets/http.conf;
+server {
+    listen 80;
+    server_name ${SITE_HOST};
+    access_log /dev/stdout site;
+    include /etc/nginx/snippets/security.conf;
+    location = /nginx-health { access_log off; return 200 "ok\n"; }
+    location ^~ /.well-known/acme-challenge/ { root /var/www/certbot; }
+    # Certificate bootstrap only: never expose the application over plaintext.
+    location / { return 503 "TLS certificate setup in progress\n"; }
+}

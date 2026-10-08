@@ -1,0 +1,205 @@
+name: bks-lab-prod
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+x-backend-environment: &backend-environment
+  APP_DEBUG: "false"
+  POSTGRES_HOST: db
+  POSTGRES_PORT: "5432"
+  POSTGRES_USER: ${POSTGRES_USER:-bkslab}
+  POSTGRES_DB: ${POSTGRES_DB:-bkslab}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+  STATS_SECRET: ${STATS_SECRET:?Set STATS_SECRET}
+  CONTENT_DIR: /app/content
+  CONTENT_SYNC_TTL_SECONDS: "5"
+  NEWS_ENABLED: ${NEWS_ENABLED:-true}
+  NEWS_TIMEZONE: ${NEWS_TIMEZONE:-Europe/Samara}
+  NEWS_SCHEDULE: '${NEWS_SCHEDULE:-["08:00","14:00","20:00"]}'
+  NEWS_LLM_PROVIDER: ${NEWS_LLM_PROVIDER:-polza}
+  NEWS_LLM_MODEL: ${NEWS_LLM_MODEL:-}
+  NEWS_LLM_API_URL: ${NEWS_LLM_API_URL:-}
+  NEWS_LLM_API_KEY: ${NEWS_LLM_API_KEY:-}
+  NEWS_HTTP_CONCURRENCY: ${NEWS_HTTP_CONCURRENCY:-5}
+  NEWS_HTTP_TIMEOUT_SECONDS: ${NEWS_HTTP_TIMEOUT_SECONDS:-20}
+  NEWS_HTTP_MAX_RESPONSE_BYTES: ${NEWS_HTTP_MAX_RESPONSE_BYTES:-2097152}
+  NEWS_HTTP_MAX_REDIRECTS: ${NEWS_HTTP_MAX_REDIRECTS:-5}
+  NEWS_HTTP_RETRIES: ${NEWS_HTTP_RETRIES:-2}
+  NEWS_SOURCE_MIN_INTERVAL_SECONDS: ${NEWS_SOURCE_MIN_INTERVAL_SECONDS:-1}
+  NEWS_LLM_CONCURRENCY: ${NEWS_LLM_CONCURRENCY:-1}
+  NEWS_LLM_TIMEOUT_SECONDS: ${NEWS_LLM_TIMEOUT_SECONDS:-60}
+  NEWS_LLM_MAX_TOKENS: ${NEWS_LLM_MAX_TOKENS:-1800}
+  NEWS_LLM_RETRIES: ${NEWS_LLM_RETRIES:-2}
+  NEWS_INITIAL_LOOKBACK_DAYS: ${NEWS_INITIAL_LOOKBACK_DAYS:-30}
+  NEWS_MAX_ITEMS_PER_SOURCE: ${NEWS_MAX_ITEMS_PER_SOURCE:-50}
+  NEWS_MAX_EXCERPT_CHARS: ${NEWS_MAX_EXCERPT_CHARS:-3000}
+  NEWS_ANALYSIS_BATCH_SIZE: ${NEWS_ANALYSIS_BATCH_SIZE:-20}
+  NEWS_TEXT_RETENTION_DAYS: ${NEWS_TEXT_RETENTION_DAYS:-90}
+  NEWS_HISTORY_RETENTION_DAYS: ${NEWS_HISTORY_RETENTION_DAYS:-180}
+  NEWS_QUEUE_POLL_SECONDS: ${NEWS_QUEUE_POLL_SECONDS:-5}
+  NEWS_LEASE_SECONDS: ${NEWS_LEASE_SECONDS:-120}
+  NEWS_HEARTBEAT_SECONDS: ${NEWS_HEARTBEAT_SECONDS:-20}
+  NEWS_JOB_MAX_ATTEMPTS: ${NEWS_JOB_MAX_ATTEMPTS:-3}
+  NEWS_JOB_RETRY_DELAY_SECONDS: ${NEWS_JOB_RETRY_DELAY_SECONDS:-60}
+  NEWS_SETTINGS_REFRESH_SECONDS: ${NEWS_SETTINGS_REFRESH_SECONDS:-30}
+  NEWS_MAINTENANCE_INTERVAL_SECONDS: ${NEWS_MAINTENANCE_INTERVAL_SECONDS:-3600}
+  NEWS_SHUTDOWN_GRACE_SECONDS: ${NEWS_SHUTDOWN_GRACE_SECONDS:-30}
+  NEWS_HEALTH_FILE: ${NEWS_HEALTH_FILE:-/tmp/news-analyzer-health}
+  NEWS_HEALTH_MAX_AGE_SECONDS: ${NEWS_HEALTH_MAX_AGE_SECONDS:-120}
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-bkslab}
+      POSTGRES_DB: ${POSTGRES_DB:-bkslab}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [app]
+    logging: *logging
+
+  backend:
+    build: ./backend
+    image: bks-lab-backend:prod
+    restart: unless-stopped
+    environment:
+      <<: *backend-environment
+      APP_TRUSTED_PROXIES: '["${BKS_PROXY_IP:-172.30.55.10}"]'
+      ADMIN_USERNAME: ${ADMIN_USERNAME:?Set ADMIN_USERNAME}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Set ADMIN_PASSWORD}
+      ADMIN_ALLOWED_ORIGINS: '["https://${SITE_HOST:?Set SITE_HOST}"]'
+      ADMIN_COOKIE_SECURE: "true"
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_SENDER: ${SMTP_SENDER:-}
+      SMTP_RECIPIENT: ${SMTP_RECIPIENT:-}
+      SMTP_USE_TLS: ${SMTP_USE_TLS:-false}
+      SMTP_START_TLS: ${SMTP_START_TLS:-true}
+      SMTP_TIMEOUT: "10"
+    depends_on:
+      db: {condition: service_healthy}
+    volumes:
+      - ./backend/content:/app/content:ro
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=4)"]
+      interval: 15s
+      timeout: 5s
+      start_period: 30s
+      retries: 10
+    networks: [app]
+    logging: *logging
+
+  news-analyzer-scheduler:
+    build: ./backend
+    image: bks-lab-backend:prod
+    restart: unless-stopped
+    environment: *backend-environment
+    # The healthy API has already applied migrations from this same image.
+    entrypoint: ["python", "-m", "src.background_tasks.news_scheduler"]
+    command: []
+    depends_on:
+      backend: {condition: service_healthy}
+    stop_grace_period: 45s
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    healthcheck:
+      test: ["CMD", "python", "-m", "src.background_tasks.news_health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+    networks: [app]
+    logging: *logging
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        SITE_URL: https://${SITE_HOST:?Set SITE_HOST}
+        CONTACT_EMAIL: ${CONTACT_EMAIL:-}
+        NEXT_PUBLIC_ADS_ENABLED: ${NEXT_PUBLIC_ADS_ENABLED:-false}
+        NEXT_PUBLIC_YANDEX_AD_SIDEBAR_ID: ${NEXT_PUBLIC_YANDEX_AD_SIDEBAR_ID:-}
+        NEXT_PUBLIC_YANDEX_AD_ARTICLE_ID: ${NEXT_PUBLIC_YANDEX_AD_ARTICLE_ID:-}
+        NEXT_PUBLIC_YANDEX_AD_NOTES_ID: ${NEXT_PUBLIC_YANDEX_AD_NOTES_ID:-}
+    restart: unless-stopped
+    environment:
+      API_INTERNAL_URL: http://backend:8000
+      SITE_URL: https://${SITE_HOST:?Set SITE_HOST}
+      CONTACT_EMAIL: ${CONTACT_EMAIL:-}
+      REVALIDATE_SECRET: ${REVALIDATE_SECRET:?Set REVALIDATE_SECRET}
+    depends_on:
+      backend: {condition: service_healthy}
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/admin/login').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 10s
+      start_period: 30s
+      retries: 10
+    networks: [app]
+    logging: *logging
+
+  nginx:
+    image: nginx:1.28-alpine
+    restart: unless-stopped
+    environment:
+      SITE_HOST: ${SITE_HOST:?Set SITE_HOST}
+      NGINX_ENVSUBST_FILTER: ^SITE_HOST$$
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+    volumes:
+      - ${NGINX_TEMPLATE_DIR:-./infra/nginx/https}:/etc/nginx/templates:ro
+      - ./infra/nginx/common:/etc/nginx/snippets:ro
+      - certificates:/etc/letsencrypt:ro
+      - acme:/var/www/certbot:ro
+    depends_on:
+      frontend: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/nginx-health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    networks:
+      app:
+        ipv4_address: ${BKS_PROXY_IP:-172.30.55.10}
+    logging: *logging
+
+  certbot:
+    image: certbot/certbot:v5.0.0
+    profiles: [tools]
+    volumes:
+      - certificates:/etc/letsencrypt
+      - acme:/var/www/certbot
+    networks: [app]
+    logging: *logging
+
+volumes:
+  pg_data:
+  certificates:
+  acme:
+
+networks:
+  app:
+    ipam:
+      config:
+        - subnet: ${BKS_NETWORK_SUBNET:-172.30.55.0/24}

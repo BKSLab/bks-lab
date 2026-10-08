@@ -1,0 +1,70 @@
+/* Light editorial surfaces, navy text and the original cyan brand accent.
+   Link and focus colors are separate from decorative/filled cyan accents. */
+
+:root {
+  color-scheme: light;
+  --color-bg: #f4f7f9;
+  --color-surface: #ffffff;
+  --color-surface-alt: #eaf0f4;
+  --color-bg-deep: #dde7ee;
+  --color-accent: #086b91;
+  --color-accent-hover: #085e80;
+  --color-brand: #18b8f2;
+  --color-brand-hover: #42c8f7;
+  --color-on-brand: #071827;
+  --color-text: #071827;
+  --color-text-muted: #44586a;
+  --color-border: #cedbe4;
+  --color-control-border: #63798a;
+  --color-light-bg: #f4f7f9;
+  --color-dark-text: #071827;
+  --color-on-accent: #ffffff;
+  --color-error: #b62626;
+  --color-success: #1e7250;
+  --radius-card: 12px;
+  --radius-button: 999px;
+}
+
+[data-theme="dark"],
+.dark-panel {
+  color-scheme: dark;
+  --color-bg: #071827;
+  --color-surface: #102636;
+  --color-surface-alt: #0b1f2e;
+  --color-bg-deep: #04111c;
+  --color-accent: #18b8f2;
+  --color-accent-hover: #42c8f7;
+  --color-text: #e8eef2;
+  --color-text-muted: #9aaab6;
+  --color-border: #234052;
+  --color-control-border: #6e899d;
+  --color-on-accent: #071827;
+  --color-error: #ff6b6b;
+  --color-success: #62d6a7;
+}
+
+/* Use the visitor's high-contrast palette even with a saved site theme.
+   Explicit system colors also expose the painted colors to audit tools. */
+@media (forced-colors: active) {
+  :root,
+  [data-theme="dark"],
+  .dark-panel {
+    color-scheme: light dark;
+    --color-bg: Canvas;
+    --color-surface: Canvas;
+    --color-surface-alt: Canvas;
+    --color-bg-deep: Canvas;
+    --color-accent: LinkText;
+    --color-accent-hover: LinkText;
+    --color-brand: ButtonFace;
+    --color-brand-hover: ButtonFace;
+    --color-on-brand: ButtonText;
+    --color-text: CanvasText;
+    --color-text-muted: CanvasText;
+    --color-border: CanvasText;
+    --color-control-border: ButtonText;
+    --color-on-accent: Canvas;
+    --color-error: CanvasText;
+    --color-success: CanvasText;
+  }
+}

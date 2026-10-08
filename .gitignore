@@ -218,3 +218,23 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Node / Next.js
+node_modules/
+.next/
+out/
+next-env.d.ts
+*.tsbuildinfo
+
+# Docker / project data
+pg_data/
+
+# Keep .env.example templates tracked
+.env.*
+!.env.example
+!.env.production.example
+backups/
+
+# Application source, not Python packaging output.
+!/frontend/src/lib/
+!/frontend/src/lib/**
