@@ -3,8 +3,10 @@
 Production-конфигурация находится в `docker-compose.prod.yml`. Она отдельна
 от локального `docker-compose.yml`: БД и приложения не публикуют порты,
 снаружи доступны только nginx 80/443. Backend и frontend работают от UID 1001.
-Контент подключается read-only из `backend/content`; PostgreSQL и сертификаты
-хранятся в именованных volumes. Не выполнять `down -v` на рабочем сервере.
+Контент хранится в PostgreSQL и редактируется через админку; загруженные
+изображения — в именованном volume `uploads` (раздаёт nginx). PostgreSQL,
+uploads и сертификаты хранятся в именованных volumes. Не выполнять
+`down -v` на рабочем сервере.
 
 Публичный запуск отложен владельцем. Эта инструкция описывает последующий
 деплой; пока конфигурация проверена только в отдельном локальном HTTPS-окружении.
@@ -44,6 +46,7 @@ docker compose --env-file .env.production -f docker-compose.prod.yml config --qu
 docker compose --env-file .env.production -f docker-compose.prod.yml build
 docker compose --env-file .env.production -f docker-compose.prod.yml up -d --wait db backend news-analyzer-scheduler frontend
 docker compose --env-file .env.production -f docker-compose.prod.yml exec -T backend python -m scripts.seed_news
+docker compose --env-file .env.production -f docker-compose.prod.yml exec -T backend python -m scripts.import_content_to_db
 ```
 
 Frontend собирается без живого API. Пустые списки допустимы только при
@@ -54,7 +57,11 @@ Frontend собирается без живого API. Пустые списки
 News Analyzer требует отдельного scheduler из того же backend-образа и
 одинаковых `NEWS_*` у API и обработчика. Без параметров LLM собранные
 материалы ожидают анализа. Seed добавляет только темы/рубрики; источники
-подключаются через предпросмотр в админке. Конфигурация — в
+подключаются через предпросмотр в админке. Импорт контента переносит
+Markdown-файлы из `backend/content/` в PostgreSQL (идемпотентен по
+`(type, slug)`, пишет первую ревизию). Импорт — разовый: повторный запуск
+после правок в админке перезапишет материалы содержимым файлов, поэтому
+после импорта контент ведётся только в редакторе. Конфигурация — в
 `.env.production.example`, подробности — в [news_analyzer.md](news_analyzer.md).
 
 ## HTTPS
@@ -67,7 +74,6 @@ NGINX_TEMPLATE_DIR=./infra/nginx/http docker compose --env-file .env.production 
 docker compose --env-file .env.production -f docker-compose.prod.yml run --rm certbot certonly --webroot --webroot-path /var/www/certbot --domain bks-lab.ru --email YOUR_CERTIFICATE_EMAIL --agree-tos --no-eff-email
 docker compose --env-file .env.production -f docker-compose.prod.yml up -d --force-recreate nginx
 docker compose --env-file .env.production -f docker-compose.prod.yml exec -T nginx nginx -t
-bash scripts/publish-content.sh
 ```
 
 В команде certbot заменить домен на `SITE_HOST` и email на настоящий адрес
@@ -109,27 +115,21 @@ IP, User-Agent, referer, cookies или query-string; error log может со�
 
 ## Публикация и обновления
 
-После получения Markdown-файлов в `backend/content`:
+Публикации создаются и редактируются в админке (`/admin/content`):
+сохранение пишет версию в `content_revisions` и переводит материал в
+статус `active`. После каждой мутации backend сам вызывает защищённый
+webhook `POST /api/revalidate` фронтенда (секрет в заголовке
+Authorization, не попадает в URL); страницы и sitemap обновляются без
+пересборки. Если webhook недоступен, сохранение не падает — ISR-кэш
+истечёт сам (5 минут). Отдельного скрипта публикации нет.
 
-```bash
-bash scripts/publish-content.sh
-# При чистом рабочем дереве можно сначала получить текущую upstream-ветку:
-bash scripts/publish-content.sh --pull
-```
-
-Скрипт ждёт TTL файлового кэша, проверяет доступность трёх типов контента,
-вызывает защищённый webhook и прогревает основные страницы/sitemap.
-Секрет берётся внутри frontend-контейнера из env, передаётся в заголовке
-Authorization и не попадает в URL или командную строку. Новые статьи
-рендерятся по запросу без пересборки. Для изменения кода нужен обычный
-build/up; `publish-content.sh` не заменяет обновление контейнеров.
+Обновление кода на сервере:
 
 ```bash
 bash scripts/backup-database.sh
 git pull --ff-only
 docker compose --env-file .env.production -f docker-compose.prod.yml up -d --build --wait db backend frontend
 docker compose --env-file .env.production -f docker-compose.prod.yml up -d --force-recreate nginx
-bash scripts/publish-content.sh
 ```
 
 При откате сначала оценить совместимость миграций с прежним кодом. Не
@@ -139,10 +139,12 @@ bash scripts/publish-content.sh
 
 `bash scripts/backup-database.sh` создаёт приватный custom-format `pg_dump`
 в `backups/`, проверяет читаемость `pg_restore --list` и только затем даёт
-файлу окончательное имя. Настроить расписание, отдельное защищённое хранилище
-и периодическое восстановление в тестовую БД. Копия на том же диске не
-защищает от потери сервера. Markdown и изображения сохраняются в git;
-секреты и сертификаты требуют отдельной закрытой резервной копии.
+файлу окончательное имя; рядом сохраняется архив volume `uploads`
+(изображения редактора). Настроить расписание, отдельное защищённое
+хранилище и периодическое восстановление в тестовую БД. Копия на том же
+диске не защищает от потери сервера. Контент теперь живёт только в БД и
+uploads — эта резервная копия критична; секреты и сертификаты требуют
+отдельной закрытой резервной копии.
 
 ## Реклама и ручная приёмка
 

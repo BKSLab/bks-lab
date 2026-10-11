@@ -1,6 +1,6 @@
 # BKS Lab — контракт REST API
 
-**Версия:** 0.8 (добавлен закрытый News Analyzer API)
+**Версия:** 0.9 (Admin API контента: CRUD, статусы, ревизии; контент в PostgreSQL)
 **Базовый URL:** публичное API — `/api/v1`; Admin API — `/api/admin`
 (prod — тот же домен через nginx, CORS не требуется)
 
@@ -332,12 +332,17 @@ server-side). 200 → `{"username": "…"}`. 401 — нет/просрочена
 
 ### Контент
 
+Источник истины для материалов — PostgreSQL (`content_items`), история
+правок — `content_revisions` (см. `docs/content_format.md`). После каждой
+успешной мутации backend вызывает webhook
+`POST {FRONTEND_INTERNAL_URL}/api/revalidate` (Bearer `REVALIDATE_SECRET`),
+обновляющий кэш фронтенда; недоступность webhook не отменяет сохранение.
+
 **GET /content** — материалы из `content_items` (включая `draft`).
 Query: `type` (`article|note|project`, опц.), `status`
 (`active|draft|archived`, опц.), `q` (подстрока в title до 100 символов,
 без учёта регистра, `%`/`_` не являются wildcard), `page`, `page_size`.
 Пустой `q` не фильтрует. Порядок: published_at desc (null последними), id desc.
-Перед чтением проверяется актуальность всех трёх Markdown-проекций.
 200 → `Paged<ContentItemRow>`:
 
 ```json
@@ -350,8 +355,95 @@ Query: `type` (`article|note|project`, опц.), `status`
 ```
 
 **GET /content/{id}** — карточка материала: все поля `ContentItemRow` +
-`synced_at`, `content_hash` и `views_timeseries_30d`
-(`[{date, value}]`). 404 — нет такого id.
+`content_markdown`, `featured`, `sort_order`, `created_at`, `updated_at`
+(и переходные алиасы `synced_at` = `updated_at`, `content_hash` = хеш
+сохранённого HTML — используются текущим фронтом витрины) +
+`views_timeseries_30d` (`[{date, value}]`). 404 — нет такого id.
+
+**POST /content** — создание материала. Тело — дискриминированное по `type`
+(`article|note|project`); обязательные поля по типу — как в
+`docs/content_format.md`:
+
+```json
+{
+  "type": "article", "slug": "new-post", "title": "…",
+  "excerpt": "…", "category": "development", "published_at": "2026-02-21",
+  "cover_image": "/images/articles/new-post.webp", "tags": ["…"],
+  "reading_time": null, "seo_title": null, "seo_description": null,
+  "og_image": null, "draft": true, "content_markdown": "Текст в Markdown"
+}
+```
+
+- Заметка: `title`, `published_at` обязательны; `related_slug` (slug статьи),
+  `tags`, `draft`, `content_markdown` — опционально; `excerpt` вычисляется
+  из первого абзаца тела.
+- Проект: обязательны `title`, `excerpt`, `cover_image`, `tags`
+  (минимум 1), `status` (`active|archived`), `featured`, `sort_order`;
+  `reading_time` у проектов не используется.
+- `slug` — по правилам `content_format.md`, уникален внутри типа;
+  изменить после создания нельзя.
+- По умолчанию материал создаётся черновиком (`draft: true`);
+  `draft: false` у проекта сохраняет его `status`.
+- Производные поля (`content_html`, `content_text`, `word_count`,
+  `reading_time` при отсутствии override) вычисляются на сервере.
+
+201 → `ContentItemFull` (поля `ContentItemRow` + `content_markdown`,
+`featured`, `sort_order`, `created_at`, `updated_at`).
+409 — slug занят в этом типе. 422 — нарушены правила типа.
+
+**PATCH /content/{id}** — частичная правка (любые редактируемые поля,
+включая `content_markdown`; `slug` неизменен). Переданные поля объединяются
+с текущим состоянием, итог валидируется по правилам типа. Опущенный
+`reading_time` пересчитывается из `word_count` при каждом сохранении.
+Каждое сохранение записывает ревизию.
+200 → `ContentItemFull`. 404 — нет id. 422 — итоговое состояние нарушает
+правила типа.
+
+**DELETE /content/{id}** — удаление материала; ревизии удаляются каскадом.
+204 без тела. 404 — нет id.
+
+**POST /content/{id}/status** — смена статуса: `{"status": "draft"}`.
+`archived` разрешён только проектам (иначе 422). Смена статуса — полноценное
+сохранение с записью ревизии. 200 → `ContentItemFull`.
+
+**GET /content/{id}/revisions** — список версий, новые первыми:
+`[{revision_no, word_count, created_at}]`. 404 — нет id.
+
+**GET /content/{id}/revisions/{no}** — снапшот версии:
+`{revision_no, word_count, created_at, snapshot}`; `snapshot` содержит все
+редактируемые и производные поля, включая `content_markdown`. 404 — нет
+материала или версии.
+
+**POST /content/{id}/revisions/{no}/restore** — откат: снапшот выбранной
+версии копируется в `content_items` и записывается новой ревизией с тем же
+содержимым (история не перезаписывается). 200 → `ContentItemFull`.
+404 — нет материала или версии.
+
+**POST /content/preview** — живое превью редактора. Тело:
+`{"content_markdown": "…"}` (1–100 000 символов). Рендер тем же пайплайном,
+что вычисляет `content_html` при сохранении; ничего не записывается в БД,
+revalidate-webhook не вызывается. 200 → `{"html": "…"}` — HTML без
+санитизации (как хранимый `content_html`; очистка — на фронтенде перед
+выводом). 422 — пустой или слишком длинный вход.
+
+**POST /content/images** — загрузка изображения (multipart/form-data):
+поле `file` (jpeg/png/webp, до 5 МБ), опциональное поле `section`
+(`articles|notes|projects|covers|shared`, по умолчанию `shared`).
+Файл декодируется Pillow (тип по сигнатуре, не по расширению),
+конвертируется в WebP с даунскейлом до ширины 1920px и сохраняется как
+`/uploads/<section>/<slug>-<suffix>.webp`; строка пишется в `media_files`.
+201 → `{id, path, original_name, mime, size_bytes, width, height,
+created_at}`. 413 — превышен лимит размера. 422 — не изображение или
+неизвестная секция.
+
+**GET /content/images** — библиотека загруженных изображений для диалога
+вставки, новые первыми (до 200). 200 → массив строк `media_files`.
+
+Внутритекстовая реклама: отдельная строка `::ad` в Markdown статьи
+рендерится в плейсхолдер `<div data-ad-slot="article-inline"></div>`,
+который фронтенд заменяет на `AdSlot`. Серверные ограничения (422 при
+сохранении): только статьи, не более двух маркеров, маркер не может быть
+первым или последним блоком текста.
 
 Просмотры статьи связываются с `/blog/post/<slug>`, проекта — с
 `/projects/<slug>`, заметки — с `note_slug` на всех страницах ленты.
@@ -366,9 +458,9 @@ Query: `type` (`article|note|project`, опц.), `status`
 ### Редакционный центр (`/news`)
 
 Полный префикс — **`/api/admin/news`**. Эти маршруты управляют источниками,
-найденными публикациями и редакционными решениями. `/content` остаётся
-витриной Markdown только для чтения; News Analyzer не создаёт публикации
-на сайте. Cookie, `require_admin`, Origin-проверка и `no-store` применяются
+найденными публикациями и редакционными решениями; News Analyzer не создаёт
+публикации на сайте — публикации создаёт редактор контента (`/content`,
+см. выше). Cookie, `require_admin`, Origin-проверка и `no-store` применяются
 ко всему разделу. ID — положительные целые числа; даты ответов — ISO 8601
 UTC. Лишние поля в запросах запрещены. В PATCH передаются изменяемые поля;
 `null` для них не допускается.
@@ -545,5 +637,5 @@ GET дополнительно возвращает безопасные `llm_co
 - Rate-limit (slowapi) на публичных формах, статистике pageview и
   `/api/admin/auth/login`; на GET — не требуется.
 - Ответы списков контента должны укладываться в < 100 мс локально
-  (контент кэшируется в памяти).
-- Backend работает в одном воркере (in-memory кэш и slowapi per-process).
+  (контент читается из PostgreSQL, объёмы малы).
+- Backend работает в одном воркере (slowapi per-process).

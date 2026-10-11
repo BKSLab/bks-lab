@@ -3,17 +3,20 @@
 from datetime import date
 from unittest.mock import AsyncMock
 
-from src.repositories.markdown_content import MarkdownContentRepository
+from src.repositories.content_items import ContentItemRepository
 from src.services.notes import NoteService
 from tests.helpers import make_article_item, make_note_item
 
 
 def make_service(notes: list, articles: list) -> NoteService:
-    notes_repository = AsyncMock(spec=MarkdownContentRepository)
-    notes_repository.get_all.return_value = notes
-    articles_repository = AsyncMock(spec=MarkdownContentRepository)
-    articles_repository.get_by_slug.side_effect = lambda slug: next(
-        (item for item in articles if item.slug == slug), None
+    notes_repository = AsyncMock(spec=ContentItemRepository)
+    notes_repository.list_by_type.side_effect = lambda content_type, statuses=None: [
+        item for item in notes
+        if item.type == content_type and (statuses is None or item.status in statuses)
+    ]
+    articles_repository = AsyncMock(spec=ContentItemRepository)
+    articles_repository.get_by_slug.side_effect = lambda content_type, slug: next(
+        (item for item in articles if item.type == content_type and item.slug == slug), None
     )
     return NoteService(
         notes_repository=notes_repository, articles_repository=articles_repository

@@ -5,16 +5,19 @@ from unittest.mock import AsyncMock
 import pytest
 
 from src.exceptions.content import ProjectNotFoundError
-from src.repositories.markdown_content import MarkdownContentRepository
+from src.repositories.content_items import ContentItemRepository
 from src.services.projects import ProjectService
 from tests.helpers import make_project_item
 
 
 def make_service(items: list) -> ProjectService:
-    repository = AsyncMock(spec=MarkdownContentRepository)
-    repository.get_all.return_value = items
-    repository.get_by_slug.side_effect = lambda slug: next(
-        (item for item in items if item.slug == slug), None
+    repository = AsyncMock(spec=ContentItemRepository)
+    repository.list_by_type.side_effect = lambda content_type, statuses=None: [
+        item for item in items
+        if item.type == content_type and (statuses is None or item.status in statuses)
+    ]
+    repository.get_by_slug.side_effect = lambda content_type, slug: next(
+        (item for item in items if item.type == content_type and item.slug == slug), None
     )
     return ProjectService(projects_repository=repository)
 
@@ -52,6 +55,7 @@ async def test_get_project_returns_archived_but_not_draft() -> None:
     archived = await service.get_project(slug="archived-one")
 
     assert archived.payload.status == "archived"
+    assert archived.content_hash
     with pytest.raises(ProjectNotFoundError) as draft:
         await service.get_project(slug="draft-one")
     with pytest.raises(ProjectNotFoundError) as missing:

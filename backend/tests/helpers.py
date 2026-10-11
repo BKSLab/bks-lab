@@ -1,10 +1,36 @@
-"""Helpers for building ParsedContent fixtures without touching the filesystem."""
+"""Helpers for building ContentItem fixtures without touching the database."""
 
 from datetime import date
 
-from src.repositories.markdown_content import ParsedContent
-from src.schemas.frontmatter import ArticleFrontmatter, NoteFrontmatter, ProjectFrontmatter
-from src.utils.markdown import content_hash, reading_time_minutes
+from src.db.models import ContentItem
+from src.utils.markdown import reading_time_minutes
+
+
+def _item(content_type: str, slug: str, **overrides) -> ContentItem:
+    values = {
+        "type": content_type,
+        "slug": slug,
+        "title": "Test item",
+        "category": None,
+        "tags": [],
+        "published_at": None,
+        "reading_time": None,
+        "status": "active",
+        "word_count": 0,
+        "content_text": "",
+        "excerpt": None,
+        "cover_image": None,
+        "seo_title": None,
+        "seo_description": None,
+        "og_image": None,
+        "related_slug": None,
+        "featured": False,
+        "sort_order": None,
+        "content_markdown": "",
+        "content_html": "",
+    }
+    values.update(overrides)
+    return ContentItem(**values)
 
 
 def make_article_item(
@@ -16,28 +42,24 @@ def make_article_item(
     draft: bool = False,
     text: str = "Some article body words.",
     tags: list[str] | None = None,
-) -> ParsedContent:
-    frontmatter = ArticleFrontmatter(
-        title=title,
-        excerpt=f"Excerpt of {title}",
-        category=category,
-        published_at=published_at,
-        cover_image=f"/images/articles/{slug}.webp",
-        tags=tags or [],
-        draft=draft,
-    )
+) -> ContentItem:
+    """Build an article ContentItem with derived fields like the importer does."""
     word_count = len(text.split())
-    return ParsedContent(
-        content_type="article",
-        slug=slug,
-        frontmatter=frontmatter,
-        status="draft" if draft else "active",
-        content_html=f"<p>{text}</p>",
-        content_text=text,
-        excerpt=text,
-        word_count=word_count,
+    return _item(
+        "article",
+        slug,
+        title=title,
+        category=category,
+        tags=tags or [],
+        published_at=published_at,
         reading_time=reading_time_minutes(word_count),
-        content_hash=content_hash(text),
+        status="draft" if draft else "active",
+        word_count=word_count,
+        content_text=text,
+        excerpt=f"Excerpt of {title}",
+        cover_image=f"/images/articles/{slug}.webp",
+        content_markdown=text,
+        content_html=f"<p>{text}</p>",
     )
 
 
@@ -49,26 +71,22 @@ def make_note_item(
     related: str | None = None,
     draft: bool = False,
     text: str = "First paragraph of the note.\nSecond paragraph.",
-) -> ParsedContent:
-    frontmatter = NoteFrontmatter(
+) -> ContentItem:
+    """Build a note ContentItem with derived fields like the importer does."""
+    word_count = len(text.split())
+    return _item(
+        "note",
+        slug,
         title=title,
         published_at=published_at,
-        tags=[],
-        related=related,
-        draft=draft,
-    )
-    word_count = len(text.split())
-    return ParsedContent(
-        content_type="note",
-        slug=slug,
-        frontmatter=frontmatter,
+        reading_time=reading_time_minutes(word_count),
         status="draft" if draft else "active",
-        content_html=f"<p>{text}</p>",
+        word_count=word_count,
         content_text=text,
         excerpt=text.split("\n")[0],
-        word_count=word_count,
-        reading_time=reading_time_minutes(word_count),
-        content_hash=content_hash(text),
+        related_slug=related,
+        content_markdown=text,
+        content_html=f"<p>{text}</p>",
     )
 
 
@@ -80,27 +98,21 @@ def make_project_item(
     featured: bool = False,
     order: int = 10,
     draft: bool = False,
-) -> ParsedContent:
-    frontmatter = ProjectFrontmatter(
+) -> ContentItem:
+    """Build a project ContentItem with derived fields like the importer does."""
+    status = "draft" if draft else project_status
+    return _item(
+        "project",
+        slug,
         title=title,
+        tags=["FastAPI"],
+        status=status,
         excerpt=f"Excerpt of {title}",
         cover_image=f"/images/projects/{slug}.webp",
-        tags=["FastAPI"],
-        status=project_status,
         featured=featured,
-        order=order,
-        draft=draft,
-    )
-    status = "draft" if draft else ("archived" if project_status == "archived" else "active")
-    return ParsedContent(
-        content_type="project",
-        slug=slug,
-        frontmatter=frontmatter,
-        status=status,
+        sort_order=order,
+        content_markdown="Project body",
         content_html="<p>Project body</p>",
         content_text="Project body",
-        excerpt="Project body",
         word_count=2,
-        reading_time=None,
-        content_hash=content_hash(slug),
     )

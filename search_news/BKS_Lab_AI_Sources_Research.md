@@ -22,12 +22,12 @@
 | A | Microsoft Research | https://www.microsoft.com/en-us/research/blog/ | HTML/RSS autodiscovery | Корпоративные исследования, агенты, качество систем |
 | A | Microsoft Azure AI | https://techcommunity.microsoft.com/category/azure-ai-services/blog/azure-ai-services-blog | HTML | Практика enterprise AI и облачной интеграции |
 | A | Mistral AI News | https://mistral.ai/news | HTML, RSS проверить | Европейские модели, open-weight и enterprise |
-| B | NVIDIA AI Blog | https://blogs.nvidia.com/blog/category/ai/ | HTML | Инфраструктура, inference, бизнес-кейсы |
+| B | NVIDIA AI Blog | https://blogs.nvidia.com/blog/tag/artificial-intelligence/ | HTML/RSS autodiscovery; прежний URL: https://blogs.nvidia.com/blog/category/ai/ | Инфраструктура, inference, бизнес-кейсы |
 | B | Cohere Blog | https://cohere.com/blog | HTML | Retrieval, корпоративные LLM и безопасность данных |
 | B | AWS Machine Learning | https://aws.amazon.com/blogs/machine-learning/ | HTML/RSS autodiscovery | Production ML и GenAI в компаниях |
 | B | IBM Research AI | https://research.ibm.com/artificial-intelligence | HTML | Enterprise AI, governance, научные разработки |
 | B | Qwen | https://qwenlm.github.io/ | HTML | Открытые модели и технические релизы |
-| B | DeepSeek | https://api-docs.deepseek.com/news | HTML | Обновления моделей и API; проверить актуальность страницы |
+| B | DeepSeek | https://www.deepseek.com/en/news/ | HTML; прежний URL документации: https://api-docs.deepseek.com/news | Обновления моделей и API; проверить актуальность страницы |
 
 **Редакционный принцип:** первоисточники отлично подходят для *обнаружения* событий, но заявления о достижениях сверять по независимым оценкам и исследованиям.
 
@@ -75,7 +75,7 @@
 |---|---|---|---|---|
 | A | AI Now Institute | https://ainowinstitute.org/ | HTML; READ | Власть, труд, корпоративное влияние, социальные последствия |
 | A | Ada Lovelace Institute | https://www.adalovelaceinstitute.org/ | HTML; READ | Общественный интерес, права, governance |
-| A | OECD AI Policy Observatory | https://oecd.ai/ | HTML/данные | Международные политики, статистика, регулирование |
+| A | OECD AI Policy Observatory | https://oecd.ai/en/wonk | HTML, публикации AI Wonk; обзор и данные: https://oecd.ai/ | Международные политики, статистика, регулирование |
 | A | EU AI Act official | https://digital-strategy.ec.europa.eu/en/policies/regulatory-framework-ai | HTML | Первичный контекст регулирования ЕС |
 | A | NIST AI Risk Management Framework | https://www.nist.gov/itl/ai-risk-management-framework | HTML | Практическое управление AI-рисками |
 | A | Stanford HAI Policy | https://hai.stanford.edu/policy | HTML | Исследования о регулировании и общественных последствиях |
@@ -125,7 +125,7 @@
 | A | Код Дурова | https://kod.ru/ | HTML | Технологическая повестка и AI в продуктах |
 | A | N+1 | https://nplus1.ru/ | HTML, RSS autodiscovery | Научные работы и общественный контекст |
 | A | ТАСС — Наука | https://nauka.tass.ru/ | HTML | Новости исследований и решений, использовать первоисточники |
-| B | CNews — Искусственный интеллект | https://www.cnews.ru/tags/iskusstvennyj_intellekt | HTML | Российский корпоративный IT и B2B-проекты |
+| B | CNews — Искусственный интеллект | https://ai.cnews.ru/ | HTML; autodiscovery ведёт на общую бизнес-ленту; прежний URL: https://www.cnews.ru/tags/iskusstvennyj_intellekt | Российский корпоративный IT и B2B-проекты |
 | B | ComNews | https://www.comnews.ru/ | HTML | Корпоративная цифровизация, инфраструктура, рынок |
 | B | РБК Тренды | https://trends.rbc.ru/ | HTML | AI, экономика, общество, будущее профессий |
 | B | Forbes Russia | https://www.forbes.ru/ | HTML | Экономика и корпоративное внедрение; часть материалов может быть закрыта |

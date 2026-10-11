@@ -11,6 +11,7 @@ from urllib.robotparser import RobotFileParser
 
 import httpx
 
+from src.clients.news_decoding import read_news_body
 from src.exceptions.news_sources import NewsRobotsError, NewsSourceError, UnsafeNewsUrlError
 
 USER_AGENT = "BKS-Lab-News/1.0 (+https://bks-lab.ru)"
@@ -204,8 +205,8 @@ class SafeNewsHttpClient:
             if wait > 0:
                 await asyncio.sleep(wait)
             self._last_request[origin] = time.monotonic()
-            # Refuse compression to bound memory even for a malicious compressed body.
-            request_headers = {"User-Agent": USER_AGENT, "Accept-Encoding": "identity", **headers}
+            request_headers = httpx.Headers({"User-Agent": USER_AGENT, **headers})
+            request_headers["Accept-Encoding"] = "gzip, deflate"
             async with asyncio.timeout(self.timeout_seconds):
                 async with self.client.stream(
                     "GET", str(url), headers=request_headers,
@@ -216,19 +217,8 @@ class SafeNewsHttpClient:
                     content_type = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
                     if content_type not in ALLOWED_TYPES:
                         raise NewsSourceError("content_type", "Источник вернул неподдерживаемый тип документа.")
-                    if response.headers.get("content-encoding", "identity").lower() != "identity":
-                        raise NewsSourceError("content_encoding", "Источник не поддерживает получение без сжатия.")
-                    size_header = response.headers.get("content-length", "")
-                    if size_header.isdigit() and int(size_header) > self.max_response_bytes:
-                        raise NewsSourceError("response_too_large", "Документ превышает допустимый размер.")
-                    parts: list[bytes] = []
-                    total = 0
-                    async for part in response.aiter_bytes(chunk_size=16384):
-                        total += len(part)
-                        if total > self.max_response_bytes:
-                            raise NewsSourceError("response_too_large", "Документ превышает допустимый размер.")
-                        parts.append(part)
-                    return NewsHttpResponse(str(url), response.status_code, b"".join(parts), response.headers)
+                    content = await read_news_body(response, self.max_response_bytes)
+                    return NewsHttpResponse(str(url), response.status_code, content, response.headers)
 
     async def _check_robots(self, url: httpx.URL) -> None:
         origin = self._origin(url)
@@ -243,7 +233,10 @@ class SafeNewsHttpClient:
                 elif result.status_code == 200:
                     parser.parse(result.content.decode("utf-8", errors="replace").splitlines())
                 else:
-                    raise NewsRobotsError()
+                    raise NewsSourceError(
+                        "robots_unavailable",
+                        f"Не удалось получить robots.txt (HTTP {result.status_code}). Проверка источника остановлена.",
+                    )
                 delay = parser.crawl_delay(ROBOT_AGENT) or 0
                 rate = parser.request_rate(ROBOT_AGENT)
                 if rate and rate.requests:

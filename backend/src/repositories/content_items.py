@@ -1,17 +1,19 @@
-"""Repository for the content_items read-model projection."""
+"""Repository for the content_items primary storage."""
 
 import logging
-from typing import TYPE_CHECKING
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from typing import Any
 
-from sqlalchemy import delete, func, select
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.db.models import ContentItem
-from src.exceptions.repositories import ContentItemRepositoryError
-
-if TYPE_CHECKING:
-    from src.repositories.markdown_content import ParsedContent
+from src.exceptions.repositories import (
+    ContentItemConflictError,
+    ContentItemRepositoryError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -22,116 +24,179 @@ class ContentItemRepository:
     def __init__(self, db_session: AsyncSession):
         self.db_session = db_session
 
-    async def sync_type(
-        self, content_type: str, items: list["ParsedContent"]
-    ) -> None:
-        """Replace the projection of one content type in a single transaction.
+    @asynccontextmanager
+    async def _operation(self) -> AsyncIterator[None]:
+        """Translate storage errors; a duplicate (type, slug) is a conflict."""
+        try:
+            yield
+        except IntegrityError as error:
+            await self.db_session.rollback()
+            raise ContentItemConflictError(str(error)) from error
+        except (SQLAlchemyError, OSError) as error:
+            await self.db_session.rollback()
+            raise ContentItemRepositoryError(str(error)) from error
 
-        Rows whose content_hash is unchanged are left untouched (synced_at is
-        not bumped); new and changed rows are upserted; rows whose files
-        disappeared or became invalid are deleted.
+    async def add(self, values: dict[str, Any]) -> ContentItem:
+        """Stage an insert without committing (multi-step service writes).
 
         Args:
-            content_type: Content type being synced (article | note | project).
-            items: ParsedContent items currently valid on disk.
+            values: Column values; must include type, slug, title, status,
+                word_count and content_text.
+
+        Returns:
+            The flushed row with the generated id populated.
 
         Raises:
-            ContentItemRepositoryError: On any database error (after rollback).
+            ContentItemConflictError: On a duplicate (type, slug).
+            ContentItemRepositoryError: On any other database error.
         """
-        try:
-            result = await self.db_session.execute(
-                select(ContentItem).where(ContentItem.type == content_type)
-            )
-            existing = {row.slug: row for row in result.scalars()}
-            inserted = updated = 0
-            for item in items:
-                row = existing.pop(item.slug, None)
-                if row is None:
-                    self.db_session.add(self._build_row(item))
-                    inserted += 1
-                elif row.content_hash != item.content_hash:
-                    self._update_row(row, item)
-                    updated += 1
-            for stale_slug, stale_row in existing.items():
-                await self.db_session.delete(stale_row)
-                logger.info(
-                    "Removing stale %s projection row: %s", content_type, stale_slug
-                )
-            await self.db_session.commit()
-            logger.info(
-                "Projection sync for %s: %d inserted, %d updated, %d deleted, %d unchanged",
-                content_type,
-                inserted,
-                updated,
-                len(existing),
-                len(items) - inserted - updated,
-            )
-        except (SQLAlchemyError, OSError) as error:
-            await self.db_session.rollback()
-            raise ContentItemRepositoryError(str(error)) from error
+        async with self._operation():
+            item = ContentItem(**values)
+            self.db_session.add(item)
+            await self.db_session.flush()
+            return item
 
-    def _build_row(self, item: "ParsedContent") -> ContentItem:
-        frontmatter = item.frontmatter
-        return ContentItem(
-            type=item.content_type,
-            slug=item.slug,
-            title=frontmatter.title,
-            category=getattr(frontmatter, "category", None),
-            tags=list(getattr(frontmatter, "tags", []) or []),
-            published_at=getattr(frontmatter, "published_at", None),
-            reading_time=item.reading_time,
-            status=item.status,
-            word_count=item.word_count,
-            content_text=item.content_text,
-            content_hash=item.content_hash,
-        )
-
-    def _update_row(self, row: ContentItem, item: "ParsedContent") -> None:
-        fresh = self._build_row(item)
-        row.title = fresh.title
-        row.category = fresh.category
-        row.tags = fresh.tags
-        row.published_at = fresh.published_at
-        row.reading_time = fresh.reading_time
-        row.status = fresh.status
-        row.word_count = fresh.word_count
-        row.content_text = fresh.content_text
-        row.content_hash = fresh.content_hash
-
-    async def delete_type(self, content_type: str) -> None:
-        """Delete all projection rows of a type (used by tests and tooling).
+    async def apply(self, item: ContentItem, values: dict[str, Any]) -> ContentItem:
+        """Stage column values on an existing row without committing.
 
         Raises:
-            ContentItemRepositoryError: On any database error (after rollback).
+            ContentItemConflictError: On a duplicate (type, slug).
+            ContentItemRepositoryError: On any other database error.
         """
-        try:
-            await self.db_session.execute(
-                delete(ContentItem).where(ContentItem.type == content_type)
-            )
-            await self.db_session.commit()
-        except (SQLAlchemyError, OSError) as error:
-            await self.db_session.rollback()
-            raise ContentItemRepositoryError(str(error)) from error
+        async with self._operation():
+            for key, value in values.items():
+                setattr(item, key, value)
+            await self.db_session.flush()
+            return item
 
-    async def get_by_type(self, content_type: str) -> list[ContentItem]:
-        """Return all projection rows of a type (admin/testing helper).
+    async def remove(self, item: ContentItem) -> None:
+        """Stage a delete without committing; revisions cascade on commit.
 
         Raises:
             ContentItemRepositoryError: On any database error.
         """
-        try:
-            result = await self.db_session.execute(
-                select(ContentItem).where(ContentItem.type == content_type)
+        async with self._operation():
+            await self.db_session.delete(item)
+            await self.db_session.flush()
+
+    async def commit(self) -> None:
+        """Commit staged writes, translating constraint violations.
+
+        Raises:
+            ContentItemConflictError: On a duplicate (type, slug).
+            ContentItemRepositoryError: On any other database error.
+        """
+        async with self._operation():
+            await self.db_session.commit()
+
+    async def create(self, values: dict[str, Any]) -> ContentItem:
+        """Insert one content item and commit.
+
+        Args:
+            values: Column values; must include type, slug, title, status,
+                word_count and content_text.
+
+        Returns:
+            The persisted row with server-generated fields populated.
+
+        Raises:
+            ContentItemConflictError: On a duplicate (type, slug).
+            ContentItemRepositoryError: On any other database error.
+        """
+        item = await self.add(values)
+        await self.commit()
+        async with self._operation():
+            await self.db_session.refresh(item)
+            return item
+
+    async def update(self, item: ContentItem, values: dict[str, Any]) -> ContentItem:
+        """Apply column values to an existing row and commit.
+
+        Args:
+            item: A persistent ContentItem (e.g. from get_by_id).
+            values: Column values to set.
+
+        Returns:
+            The refreshed row.
+
+        Raises:
+            ContentItemConflictError: On a duplicate (type, slug).
+            ContentItemRepositoryError: On any other database error.
+        """
+        await self.apply(item, values)
+        await self.commit()
+        async with self._operation():
+            await self.db_session.refresh(item)
+            return item
+
+    async def delete(self, item: ContentItem) -> None:
+        """Delete a material and commit; revisions are removed by the FK cascade.
+
+        Raises:
+            ContentItemRepositoryError: On any database error.
+        """
+        await self.remove(item)
+        await self.commit()
+
+    async def get_by_id(self, item_id: int) -> ContentItem | None:
+        """Return one material by its stable database identifier.
+
+        Raises:
+            ContentItemRepositoryError: On any database error.
+        """
+        async with self._operation():
+            return await self.db_session.get(ContentItem, item_id)
+
+    async def get_by_slug(self, content_type: str, slug: str) -> ContentItem | None:
+        """Return one material by type and slug, or None when missing.
+
+        Raises:
+            ContentItemRepositoryError: On any database error.
+        """
+        async with self._operation():
+            result = await self.db_session.scalars(
+                select(ContentItem).where(
+                    ContentItem.type == content_type,
+                    ContentItem.slug == slug,
+                )
             )
-            return list(result.scalars())
-        except (SQLAlchemyError, OSError) as error:
-            raise ContentItemRepositoryError(str(error)) from error
+            return result.one_or_none()
+
+    async def list_by_type(
+        self, content_type: str, *, statuses: tuple[str, ...] | None = None
+    ) -> list[ContentItem]:
+        """Return all materials of a type, optionally filtered by status.
+
+        Sorting is left to the caller: articles, notes and projects each
+        have their own public ordering rules.
+
+        Args:
+            content_type: Content type (article | note | project).
+            statuses: When given, only rows with these statuses are returned.
+
+        Raises:
+            ContentItemRepositoryError: On any database error.
+        """
+        statement = select(ContentItem).where(ContentItem.type == content_type)
+        if statuses is not None:
+            statement = statement.where(ContentItem.status.in_(statuses))
+        async with self._operation():
+            result = await self.db_session.scalars(statement)
+            return list(result)
 
     async def get_page(
         self, *, content_type: str | None, status: str | None, query: str | None,
         page: int, page_size: int,
     ) -> tuple[list[ContentItem], int]:
-        """Read projection rows with literal case-insensitive title matching."""
+        """Read admin rows with literal case-insensitive title matching.
+
+        Returns:
+            Tuple of the page slice (published_at desc nulls last, id desc)
+            and the total number of rows matching the filters.
+
+        Raises:
+            ContentItemRepositoryError: On any database error.
+        """
         statement = select(ContentItem)
         if content_type:
             statement = statement.where(ContentItem.type == content_type)
@@ -139,21 +204,10 @@ class ContentItemRepository:
             statement = statement.where(ContentItem.status == status)
         if query:
             statement = statement.where(ContentItem.title.icontains(query, autoescape=True))
-        try:
+        async with self._operation():
             total = await self.db_session.scalar(select(func.count()).select_from(statement.subquery()))
             result = await self.db_session.scalars(
                 statement.order_by(ContentItem.published_at.desc().nulls_last(), ContentItem.id.desc())
                 .offset((page - 1) * page_size).limit(page_size)
             )
             return list(result), int(total or 0)
-        except (SQLAlchemyError, OSError) as error:
-            await self.db_session.rollback()
-            raise ContentItemRepositoryError("Content page read failed") from error
-
-    async def get_by_id(self, item_id: int) -> ContentItem | None:
-        """Return one projected material by its stable database identifier."""
-        try:
-            return await self.db_session.get(ContentItem, item_id)
-        except (SQLAlchemyError, OSError) as error:
-            await self.db_session.rollback()
-            raise ContentItemRepositoryError("Content detail read failed") from error

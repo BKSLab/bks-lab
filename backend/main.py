@@ -7,6 +7,7 @@ from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from slowapi.errors import RateLimitExceeded
 
 from src.api import admin, articles, categories, forms, health, news, notes, projects, stats
@@ -46,6 +47,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 app = FastAPI(title=settings.app.name, lifespan=lifespan)
 app.state.limiter = limiter
 app.add_middleware(AdminNoStoreMiddleware)
+
+# Editor uploads: served by the backend in dev; in production nginx serves
+# the same volume at /uploads/ and these requests never reach the app.
+settings.media.dir.mkdir(parents=True, exist_ok=True)
+app.mount("/uploads", StaticFiles(directory=settings.media.dir), name="uploads")
 
 
 @app.exception_handler(ServiceError)

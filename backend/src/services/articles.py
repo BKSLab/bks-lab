@@ -1,48 +1,44 @@
 """Article use-cases: lists with filters/search, latest, detail."""
 
 import logging
-from typing import cast
 
+from src.db.models import ContentItem
 from src.exceptions.content import ArticleNotFoundError
-from src.repositories.markdown_content import MarkdownContentRepository, ParsedContent
+from src.repositories.content_items import ContentItemRepository
 from src.schemas.articles import DEFAULT_OG_IMAGE, ArticleDetail, ArticleSummary, SeoMeta
-from src.schemas.frontmatter import ArticleFrontmatter
 from src.schemas.pagination import Paged
 from src.schemas.results import DetailResult
+from src.utils import markdown as md
 
 logger = logging.getLogger(__name__)
 
-
-def _fm(item: ParsedContent) -> ArticleFrontmatter:
-    return cast(ArticleFrontmatter, item.frontmatter)
+CONTENT_TYPE = "article"
 
 
-def build_article_summary(item: ParsedContent) -> ArticleSummary:
-    """Map a parsed article file to its public summary schema."""
-    frontmatter = _fm(item)
+def build_article_summary(item: ContentItem) -> ArticleSummary:
+    """Map a stored article to its public summary schema."""
     return ArticleSummary(
         slug=item.slug,
-        title=frontmatter.title,
-        excerpt=frontmatter.excerpt,
-        category=frontmatter.category,
-        published_at=frontmatter.published_at,
+        title=item.title,
+        excerpt=item.excerpt or "",
+        category=item.category,
+        published_at=item.published_at,
         reading_time=item.reading_time or 1,
-        cover_image=frontmatter.cover_image,
-        tags=frontmatter.tags,
+        cover_image=item.cover_image or "",
+        tags=list(item.tags),
     )
 
 
-def build_article_detail(item: ParsedContent) -> ArticleDetail:
-    """Map a parsed article file to its public detail schema."""
+def build_article_detail(item: ContentItem) -> ArticleDetail:
+    """Map a stored article to its public detail schema."""
     summary = build_article_summary(item)
-    frontmatter = _fm(item)
     return ArticleDetail(
         **summary.model_dump(),
-        content_html=item.content_html,
+        content_html=item.content_html or "",
         seo=SeoMeta(
-            title=frontmatter.seo_title or frontmatter.title,
-            description=frontmatter.seo_description or frontmatter.excerpt,
-            og_image=frontmatter.og_image or DEFAULT_OG_IMAGE,
+            title=item.seo_title or item.title,
+            description=item.seo_description or item.excerpt or "",
+            og_image=item.og_image or DEFAULT_OG_IMAGE,
         ),
     )
 
@@ -50,7 +46,7 @@ def build_article_detail(item: ParsedContent) -> ArticleDetail:
 class ArticleService:
     """Use-cases for blog articles."""
 
-    def __init__(self, articles_repository: MarkdownContentRepository):
+    def __init__(self, articles_repository: ContentItemRepository):
         self.articles_repository = articles_repository
 
     async def list_articles(
@@ -79,14 +75,14 @@ class ArticleService:
         """
         items = await self._published_items()
         if category is not None:
-            items = [item for item in items if _fm(item).category == category]
+            items = [item for item in items if item.category == category]
         if query is not None:
             needle = query.lower()
             items = [
                 item
                 for item in items
-                if needle in _fm(item).title.lower()
-                or needle in _fm(item).excerpt.lower()
+                if needle in item.title.lower()
+                or needle in (item.excerpt or "").lower()
                 or needle in item.content_text.lower()
             ]
         total = len(items)
@@ -100,20 +96,27 @@ class ArticleService:
         return [build_article_summary(item) for item in items[:limit]]
 
     async def get_article(self, *, slug: str) -> DetailResult[ArticleDetail]:
-        """Return one published article by slug with its content hash.
+        """Return one published article by slug with a content hash for the ETag.
+
+        The hash is derived from the stored HTML, so it changes exactly when
+        the rendered content changes.
 
         Raises:
             ArticleNotFoundError: When the article is missing or is a draft.
         """
-        item = await self.articles_repository.get_by_slug(slug)
+        item = await self.articles_repository.get_by_slug(CONTENT_TYPE, slug)
         if item is None or item.status == "draft":
             raise ArticleNotFoundError(slug=slug)
-        return DetailResult(payload=build_article_detail(item), content_hash=item.content_hash)
+        return DetailResult(
+            payload=build_article_detail(item),
+            content_hash=md.content_hash(item.content_html or ""),
+        )
 
-    async def _published_items(self) -> list[ParsedContent]:
-        items = await self.articles_repository.get_all()
-        published = [item for item in items if item.status != "draft"]
+    async def _published_items(self) -> list[ContentItem]:
+        items = await self.articles_repository.list_by_type(
+            CONTENT_TYPE, statuses=("active", "archived")
+        )
         return sorted(
-            published,
-            key=lambda item: (-_fm(item).published_at.toordinal(), item.slug),
+            items,
+            key=lambda item: (-item.published_at.toordinal(), item.slug),
         )

@@ -1,18 +1,13 @@
 """Note use-cases: feed with pagination and latest notes."""
 
 import logging
-from typing import cast
 
-from src.repositories.markdown_content import MarkdownContentRepository, ParsedContent
-from src.schemas.frontmatter import NoteFrontmatter
+from src.db.models import ContentItem
+from src.repositories.content_items import ContentItemRepository
 from src.schemas.notes import Note, RelatedArticle
 from src.schemas.pagination import Paged
 
 logger = logging.getLogger(__name__)
-
-
-def _fm(item: ParsedContent) -> NoteFrontmatter:
-    return cast(NoteFrontmatter, item.frontmatter)
 
 
 class NoteService:
@@ -20,8 +15,8 @@ class NoteService:
 
     def __init__(
         self,
-        notes_repository: MarkdownContentRepository,
-        articles_repository: MarkdownContentRepository,
+        notes_repository: ContentItemRepository,
+        articles_repository: ContentItemRepository,
     ):
         self.notes_repository = notes_repository
         self.articles_repository = articles_repository
@@ -39,35 +34,33 @@ class NoteService:
         items = await self._published_items()
         return [await self._build_note(item) for item in items[:limit]]
 
-    async def _published_items(self) -> list[ParsedContent]:
-        items = await self.notes_repository.get_all()
-        published = [item for item in items if item.status != "draft"]
+    async def _published_items(self) -> list[ContentItem]:
+        items = await self.notes_repository.list_by_type("note", statuses=("active", "archived"))
         return sorted(
-            published,
-            key=lambda item: (-_fm(item).published_at.toordinal(), item.slug),
+            items,
+            key=lambda item: (-item.published_at.toordinal(), item.slug),
         )
 
-    async def _build_note(self, item: ParsedContent) -> Note:
-        frontmatter = _fm(item)
+    async def _build_note(self, item: ContentItem) -> Note:
         return Note(
             slug=item.slug,
-            title=frontmatter.title,
-            excerpt=item.excerpt,
-            published_at=frontmatter.published_at,
+            title=item.title,
+            excerpt=item.excerpt or "",
+            published_at=item.published_at,
             reading_time=item.reading_time or 1,
-            tags=frontmatter.tags,
-            related_article=await self._resolve_related(frontmatter),
-            content_html=item.content_html,
+            tags=list(item.tags),
+            related_article=await self._resolve_related(item),
+            content_html=item.content_html or "",
         )
 
-    async def _resolve_related(self, frontmatter: NoteFrontmatter) -> RelatedArticle | None:
+    async def _resolve_related(self, item: ContentItem) -> RelatedArticle | None:
         """Resolve the optional related article slug; broken links degrade to null."""
-        if not frontmatter.related:
+        if not item.related_slug:
             return None
-        related = await self.articles_repository.get_by_slug(frontmatter.related)
+        related = await self.articles_repository.get_by_slug("article", item.related_slug)
         if related is None or related.status == "draft":
             logger.warning(
-                "Note references a missing or draft article: %s", frontmatter.related
+                "Note references a missing or draft article: %s", item.related_slug
             )
             return None
-        return RelatedArticle(slug=related.slug, title=related.frontmatter.title)
+        return RelatedArticle(slug=related.slug, title=related.title)

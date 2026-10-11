@@ -58,24 +58,33 @@ describe("admin server routes", () => {
     expect((await axe(container)).violations).toEqual([]);
   });
 
-  it("preserves filters in pagination and exposes material details without editing controls", async () => {
+  it("preserves filters in pagination and exposes creation and editing links", async () => {
     vi.mocked(adminFetch).mockResolvedValue({ ...paged, items: [item], total: 45, page: 2, pages: 3 });
     const element = await AdminContentPage({ searchParams: Promise.resolve({ type: "article", status: "draft", q: "API", page: "2" }) });
     const { container } = render(<AdminLayout>{element}</AdminLayout>);
     expect(adminFetch).toHaveBeenCalledWith("/content?type=article&status=draft&q=API&page=2&page_size=20");
     expect(screen.getByRole("link", { name: "Архитектура API" }).getAttribute("href")).toBe("/admin/content/1");
     expect(screen.getByRole("link", { name: "Вперёд" }).getAttribute("href")).toContain("status=draft&q=API&page=3");
-    expect(screen.queryByRole("button", { name: /Удалить|Редактировать|Создать/ })).toBeNull();
+    expect(screen.getByRole("link", { name: "Новая статья" }).getAttribute("href")).toBe("/admin/content/new?type=article");
+    expect(screen.getByRole("link", { name: "Править" }).getAttribute("href")).toBe("/admin/content/1/edit");
+    expect(screen.queryByText(/Markdown-файлах проекта/)).toBeNull();
     expect((await axe(container)).violations).toEqual([]);
   });
 
-  it("omits links to unpublished drafts and shows synchronization metadata", async () => {
-    vi.mocked(adminFetch).mockResolvedValue({ ...item, synced_at: "2026-10-08T10:00:00Z", content_hash: "abc123", views_timeseries_30d: [] });
-    render(<AdminLayout>{await AdminContentDetailPage({ params: Promise.resolve({ id: "1" }) })}</AdminLayout>);
+  it("omits links to unpublished drafts and shows editing controls with update time", async () => {
+    vi.mocked(adminFetch).mockResolvedValue({
+      ...item, excerpt: "Аннотация", cover_image: null, seo_title: null, seo_description: null, og_image: null,
+      related_slug: null, featured: false, sort_order: null, reading_time: null, content_markdown: "Текст",
+      created_at: "2026-10-01T10:00:00Z", updated_at: "2026-10-08T10:00:00Z", views_timeseries_30d: [],
+    });
+    const { container } = render(<AdminLayout>{await AdminContentDetailPage({ params: Promise.resolve({ id: "1" }) })}</AdminLayout>);
     expect(screen.getByRole("heading", { level: 1 }).textContent).toBe(item.title);
     expect(screen.queryByRole("link", { name: "Открыть на сайте" })).toBeNull();
-    expect(screen.getByText("abc123")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Править" }).getAttribute("href")).toBe("/admin/content/1/edit");
+    expect(screen.getByRole("button", { name: "Удалить материал" })).toBeTruthy();
+    expect(screen.getByText("08.10.2026, 10:00")).toBeTruthy();
     expect(screen.getByText("Черновик")).toBeTruthy();
+    expect((await axe(container)).violations).toEqual([]);
   });
 
   it("rejects malformed material ids after authentication", async () => {

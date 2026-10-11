@@ -238,3 +238,6 @@ backups/
 # Application source, not Python packaging output.
 !/frontend/src/lib/
 !/frontend/src/lib/**
+
+# Editor uploads (dev backend serves ./backend/uploads at /uploads)
+backend/uploads/

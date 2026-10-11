@@ -9,7 +9,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 RUN sed -i 's/\r$//' entrypoint.sh && chmod +x entrypoint.sh \
-    && groupadd --gid 1001 app && useradd --uid 1001 --gid app --no-create-home app
+    && groupadd --gid 1001 app && useradd --uid 1001 --gid app --no-create-home app \
+    && mkdir -p /app/uploads && chown app:app /app/uploads
 
 USER app
 EXPOSE 8000

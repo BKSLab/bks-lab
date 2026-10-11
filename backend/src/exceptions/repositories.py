@@ -25,15 +25,31 @@ class StatsRepositoryError(RepositoryError):
 
 
 class ContentItemRepositoryError(RepositoryError):
-    """Failure in the content_items projection repository."""
+    """Failure in the content_items storage repository."""
 
 
-class ContentRepositoryError(RepositoryError):
-    """Content directory or file could not be read safely."""
+class ContentItemConflictError(ContentItemRepositoryError):
+    """A content item with the same (type, slug) already exists."""
+
+    status_code = status.HTTP_409_CONFLICT
 
     @property
     def detail(self) -> str:
-        return "Content storage error. Please try again later."
+        return "A material with this slug already exists."
+
+
+class ContentRevisionRepositoryError(RepositoryError):
+    """Failure in the content_revisions storage repository."""
+
+
+class ContentRevisionConflictError(ContentRevisionRepositoryError):
+    """A revision with the same (item_id, revision_no) already exists."""
+
+    status_code = status.HTTP_409_CONFLICT
+
+    @property
+    def detail(self) -> str:
+        return "A conflicting content revision already exists."
 
 
 class AdminSessionRepositoryError(RepositoryError):
@@ -42,3 +58,7 @@ class AdminSessionRepositoryError(RepositoryError):
 
 class SubscriberRepositoryError(RepositoryError):
     """Subscriber storage failed."""
+
+
+class MediaFileRepositoryError(RepositoryError):
+    """Failure in the media_files storage repository."""

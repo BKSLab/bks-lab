@@ -11,6 +11,7 @@ import { NewsJobLauncher } from "@/components/admin/news/NewsJobLauncher";
 import { NewsJobProgress } from "@/components/admin/news/NewsJobProgress";
 import { NewsSettingsForm } from "@/components/admin/news/NewsSettingsForm";
 import { NewsTaxonomyManager } from "@/components/admin/news/NewsTaxonomyManager";
+import { sourceCatalogue } from "@/lib/news-api/catalogue";
 import { newsCategory, newsJob, newsSettings, newsSource, newsTopic } from "./news-fixtures";
 
 beforeEach(() => { fetchMock.mockReset(); Object.values(router).forEach(fn => fn.mockReset()); vi.stubGlobal("fetch", fetchMock); });
@@ -96,10 +97,36 @@ describe("source discovery and saving", () => {
 
   it("only prefills a catalogue suggestion, never auto-enables or saves it", () => {
     render(<NewsSourceForm topics={[]} categories={[]} />);
-    fireEvent.change(screen.getByLabelText("Подставить адрес из каталога"), { target: { value: "0" } });
-    expect((screen.getByLabelText("Название (обязательно)") as HTMLInputElement).value).toBe("Simon Willison — статьи");
+    fireEvent.change(screen.getByLabelText("Подставить адрес из каталога"), { target: { value: "eng-simon" } });
+    expect((screen.getByLabelText("Название (обязательно)") as HTMLInputElement).value).toBe("Simon Willison");
+    expect((screen.getByLabelText("URL источника (обязательно)") as HTMLInputElement).value).toBe("https://simonwillison.net/atom/entries/");
     expect((screen.getByLabelText("Включить регулярный сбор") as HTMLInputElement).checked).toBe(false);
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("prefills a catalogue deep link but still requires successful discovery", async () => {
+    render(<NewsSourceForm topics={[]} categories={[]} catalogueEntry={sourceCatalogue.find(entry => entry.id === "ru-tbank")} />);
+    expect((screen.getByLabelText("Название (обязательно)") as HTMLInputElement).value).toBe("Т-Банк AI Research");
+    expect((screen.getByLabelText("URL источника (обязательно)") as HTMLInputElement).value).toBe("https://research.tbank.ru/");
+    expect((screen.getByLabelText("Источник связан с поставщиком продукта") as HTMLInputElement).checked).toBe(true);
+    expect((screen.getByLabelText("Включить регулярный сбор") as HTMLInputElement).checked).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "Сохранить источник" }));
+    expect((await screen.findByRole("alert")).textContent).toContain("Сначала проверьте");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("clears the previous discovery when another catalogue entry is selected", async () => {
+    fetchMock.mockResolvedValueOnce(json({ job_id: 9, status: "queued" }, 202)).mockResolvedValueOnce(json(newsJob));
+    render(<NewsSourceForm topics={[]} categories={[]} />);
+    fillSource();
+    fireEvent.click(screen.getByRole("button", { name: "Проверить источник" }));
+    await screen.findByRole("link", { name: "Новая публикация (в новой вкладке)" });
+    fireEvent.change(screen.getByLabelText("Подставить адрес из каталога"), { target: { value: "ru-tbank" } });
+    expect(screen.queryByRole("link", { name: "Новая публикация (в новой вкладке)" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "Открыть задание № 9" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Сохранить источник" }));
+    expect((await screen.findByRole("alert")).textContent).toContain("Сначала проверьте");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });
 

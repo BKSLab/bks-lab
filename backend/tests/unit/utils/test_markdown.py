@@ -3,8 +3,11 @@
 import pytest
 
 from src.utils.markdown import (
+    AD_PLACEHOLDER,
     MarkdownParseError,
+    ad_marker_error,
     content_hash,
+    count_ad_markers,
     count_words,
     extract_excerpt,
     extract_plain_text,
@@ -96,3 +99,34 @@ def test_slug_validation() -> None:
     assert not is_valid_slug("")
     assert is_valid_slug("a" * 200)
     assert not is_valid_slug("a" * 201)
+
+
+def test_render_markdown_turns_ad_marker_into_placeholder() -> None:
+    html = render_markdown("Before.\n\n::ad\n\nAfter.")
+
+    assert AD_PLACEHOLDER in html
+    assert "::ad" not in html
+
+
+def test_render_markdown_keeps_ad_marker_inside_code_blocks_literal() -> None:
+    html = render_markdown("Text.\n\n```\n::ad\n```")
+
+    assert AD_PLACEHOLDER not in html
+
+
+def test_count_ad_markers_ignores_fenced_code() -> None:
+    assert count_ad_markers("a\n\n::ad\n\nb") == 1
+    assert count_ad_markers("```\n::ad\n```\n\n::ad") == 1
+    assert count_ad_markers("no markers") == 0
+
+
+def test_ad_marker_rules() -> None:
+    body = "First.\n\n::ad\n\nMiddle.\n\n::ad\n\nLast."
+
+    assert ad_marker_error("article", body) is None
+    assert ad_marker_error("note", body) is not None
+    assert ad_marker_error("project", body) is not None
+    assert ad_marker_error("article", "::ad\n\nBody.") is not None
+    assert ad_marker_error("article", "Body.\n\n::ad") is not None
+    assert ad_marker_error("article", body + "\n\n::ad\n\nTail.") is not None
+    assert ad_marker_error("article", "No markers at all.") is None

@@ -2,20 +2,24 @@
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Path, Query, Request, Response
+from fastapi import APIRouter, Depends, File, Form, Path, Query, Request, Response, UploadFile
 
 from src.core.limiter import limiter
+from src.core.settings import get_settings
 from src.dependencies.admin import (
     AdminDep, COOKIE_NAME, check_admin_origin, clear_session_cookie, require_admin,
     set_session_cookie,
 )
 from src.dependencies.services import (
-    AdminAuthServiceDep, AdminContentServiceDep, AdminStatsServiceDep, SubscriberServiceDep,
+    AdminAuthServiceDep, AdminContentServiceDep, AdminStatsServiceDep,
+    ContentAdminServiceDep, MediaServiceDep, SubscriberServiceDep,
 )
 from src.schemas.admin import (
-    AdminIdentity, ContentItemDetail, ContentItemRow, ContentStatus, ContentType,
-    LoginRequest, LoginResponse, Metric, Overview, PageStatsRow, Period,
-    ReferrerRow, SubscriberRow, TimeseriesPoint,
+    AdminIdentity, ContentCreate, ContentItemDetail, ContentItemFull, ContentItemRow,
+    ContentPatch, ContentPreviewRequest, ContentPreviewResponse, ContentRevisionDetail,
+    ContentRevisionRow, ContentStatus, ContentStatusChange, ContentType, LoginRequest,
+    LoginResponse, MediaFileRow, Metric, Overview, PageStatsRow, Period, ReferrerRow,
+    SubscriberRow, TimeseriesPoint,
 )
 from src.schemas.pagination import Paged
 
@@ -119,7 +123,7 @@ async def referrers(service: AdminStatsServiceDep, period: PeriodQuery = "30d") 
 
 @protected.get(
     "/content", response_model=Paged[ContentItemRow], summary="Read the content registry",
-    description="Search the synchronized Markdown projection, including draft and archived materials.",
+    description="Search the content storage, including draft and archived materials.",
     operation_id="adminContent", response_description="Filtered materials with thirty-day visits.",
 )
 async def content(
@@ -129,21 +133,167 @@ async def content(
     q: Annotated[str | None, Query(max_length=100, description="Literal title substring, case-insensitive.")] = None,
     page: Page = 1, page_size: PageSize = 20,
 ) -> Paged[ContentItemRow]:
-    """Read projected materials with validated filters and bounded pagination."""
+    """Read stored materials with validated filters and bounded pagination."""
     return await service.get_page(content_type=content_type, status=status, query=q, page=page, page_size=page_size)
+
+
+@protected.post(
+    "/content/images", status_code=201, response_model=MediaFileRow, summary="Upload an image",
+    description="Accept a JPEG/PNG/WebP file, convert it to WebP (downscaled to the configured width) and register it for the editor insert dialog.",
+    operation_id="adminContentImageUpload", response_description="Stored image with its public /uploads path.",
+    responses={403: {"description": "Origin not allowed."}, 413: {"description": "Image exceeds the size limit."},
+               422: {"description": "Not a supported image or unknown section."}},
+)
+async def content_image_upload(
+    service: MediaServiceDep,
+    file: Annotated[UploadFile, File(description="JPEG, PNG or WebP image.")],
+    section: Annotated[str, Form(description="Storage section: articles | notes | projects | covers | shared.")] = "shared",
+) -> MediaFileRow:
+    """Convert and store one uploaded image."""
+    data = await file.read(get_settings().media.max_bytes + 1)
+    media = await service.save_upload(
+        original_name=file.filename or "image", data=data, section=section
+    )
+    return MediaFileRow.model_validate(media)
+
+
+@protected.get(
+    "/content/images", response_model=list[MediaFileRow], summary="List uploaded images",
+    description="Uploaded images, newest first, for the editor insert dialog.",
+    operation_id="adminContentImages", response_description="Image library rows.",
+)
+async def content_images(service: MediaServiceDep) -> list[MediaFileRow]:
+    """List the image library."""
+    rows = await service.list_images()
+    return [MediaFileRow.model_validate(row) for row in rows]
 
 
 @protected.get(
     "/content/{item_id}", response_model=ContentItemDetail, summary="Read material details",
-    description="Projection metadata and thirty-day visit series; content stays editable only in git.",
-    operation_id="adminContentDetail", response_description="Material metadata and visit series.",
+    description="Stored metadata, the source Markdown for the editor and the thirty-day visit series.",
+    operation_id="adminContentDetail", response_description="Material metadata, Markdown body and visit series.",
     responses={404: {"description": "Material does not exist."}},
 )
 async def content_detail(
-    service: AdminContentServiceDep, item_id: Annotated[int, Path(ge=1, description="Projection row ID.")],
+    service: AdminContentServiceDep, item_id: Annotated[int, Path(ge=1, description="Content item ID.")],
 ) -> ContentItemDetail:
-    """Read one material without exposing any editing endpoint."""
+    """Read one material, including the Markdown body for the editor."""
     return await service.get_detail(item_id)
+
+
+@protected.post(
+    "/content", status_code=201, response_model=ContentItemFull, summary="Create a material",
+    description="Create an article, note or project (draft by default); the first revision is recorded.",
+    operation_id="adminContentCreate", response_description="Created material with derived fields.",
+    responses={403: {"description": "Origin not allowed."}, 409: {"description": "Slug already exists for this type."},
+               422: {"description": "Type-specific validation failed."}},
+)
+async def content_create(service: ContentAdminServiceDep, data: ContentCreate) -> ContentItemFull:
+    """Create a material and its first revision in one transaction."""
+    return await service.create_item(data)
+
+
+@protected.post(
+    "/content/preview", response_model=ContentPreviewResponse, summary="Render a Markdown preview",
+    description="Render the editor body to HTML with the same pipeline used on save, for the live preview. Nothing is stored, no revalidation fires.",
+    operation_id="adminContentPreview", response_description="Rendered HTML (unsanitized, like stored content_html).",
+    responses={403: {"description": "Origin not allowed."}, 422: {"description": "Input validation failed."}},
+)
+async def content_preview(
+    service: ContentAdminServiceDep, data: ContentPreviewRequest,
+) -> ContentPreviewResponse:
+    """Render Markdown for the live editor preview without touching storage."""
+    return ContentPreviewResponse(html=service.render_preview(data.content_markdown))
+
+
+@protected.patch(
+    "/content/{item_id}", response_model=ContentItemFull, summary="Save material edits",
+    description="Apply a partial edit; the merged state is validated per content type and a revision is recorded.",
+    operation_id="adminContentUpdate", response_description="Updated material with derived fields.",
+    responses={403: {"description": "Origin not allowed."}, 404: {"description": "Material does not exist."},
+               422: {"description": "Type-specific validation failed."}},
+)
+async def content_update(
+    service: ContentAdminServiceDep,
+    data: ContentPatch,
+    item_id: Annotated[int, Path(ge=1, description="Content item ID.")],
+) -> ContentItemFull:
+    """Save edits and record a revision in one transaction."""
+    return await service.update_item(item_id, data)
+
+
+@protected.delete(
+    "/content/{item_id}", status_code=204, response_class=Response, summary="Delete a material",
+    description="Delete the material; its revisions are removed by cascade.",
+    operation_id="adminContentDelete", response_description="Deleted; no body.",
+    responses={403: {"description": "Origin not allowed."}, 404: {"description": "Material does not exist."}},
+)
+async def content_delete(
+    service: ContentAdminServiceDep, item_id: Annotated[int, Path(ge=1, description="Content item ID.")],
+) -> Response:
+    """Delete one material."""
+    await service.delete_item(item_id)
+    return Response(status_code=204)
+
+
+@protected.post(
+    "/content/{item_id}/status", response_model=ContentItemFull, summary="Change material status",
+    description="Transition the status (draft | active | archived); archived is valid for projects only. A revision is recorded.",
+    operation_id="adminContentSetStatus", response_description="Material with the new status.",
+    responses={403: {"description": "Origin not allowed."}, 404: {"description": "Material does not exist."},
+               422: {"description": "Archived is allowed for projects only."}},
+)
+async def content_set_status(
+    service: ContentAdminServiceDep,
+    data: ContentStatusChange,
+    item_id: Annotated[int, Path(ge=1, description="Content item ID.")],
+) -> ContentItemFull:
+    """Change the publication status and record a revision."""
+    return await service.set_status(item_id, data.status)
+
+
+@protected.get(
+    "/content/{item_id}/revisions", response_model=list[ContentRevisionRow], summary="List material versions",
+    description="Version metadata (revision number, word count, saved at), newest first.",
+    operation_id="adminContentRevisions", response_description="Version list.",
+    responses={404: {"description": "Material does not exist."}},
+)
+async def content_revisions(
+    service: ContentAdminServiceDep, item_id: Annotated[int, Path(ge=1, description="Content item ID.")],
+) -> list[ContentRevisionRow]:
+    """List the version history of one material."""
+    return await service.list_revisions(item_id)
+
+
+@protected.get(
+    "/content/{item_id}/revisions/{revision_no}", response_model=ContentRevisionDetail, summary="Read one version",
+    description="Full snapshot of one saved version, including the Markdown body.",
+    operation_id="adminContentRevision", response_description="Version snapshot.",
+    responses={404: {"description": "Material or version does not exist."}},
+)
+async def content_revision(
+    service: ContentAdminServiceDep,
+    item_id: Annotated[int, Path(ge=1, description="Content item ID.")],
+    revision_no: Annotated[int, Path(ge=1, description="Revision number within the material.")],
+) -> ContentRevisionDetail:
+    """Read one version snapshot."""
+    return await service.get_revision(item_id, revision_no)
+
+
+@protected.post(
+    "/content/{item_id}/revisions/{revision_no}/restore", response_model=ContentItemFull,
+    summary="Restore a version",
+    description="Copy the chosen snapshot back into the material and record it as a new revision; history is never rewritten.",
+    operation_id="adminContentRestore", response_description="Material restored to the chosen version.",
+    responses={403: {"description": "Origin not allowed."}, 404: {"description": "Material or version does not exist."}},
+)
+async def content_restore(
+    service: ContentAdminServiceDep,
+    item_id: Annotated[int, Path(ge=1, description="Content item ID.")],
+    revision_no: Annotated[int, Path(ge=1, description="Revision number within the material.")],
+) -> ContentItemFull:
+    """Restore one version as a new revision."""
+    return await service.restore_revision(item_id, revision_no)
 
 
 @protected.get(

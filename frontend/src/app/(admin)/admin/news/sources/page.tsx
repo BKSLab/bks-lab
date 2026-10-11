@@ -1,10 +1,12 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { NewsShell } from "@/components/admin/news/NewsShell";
+import { NewsJobLauncher } from "@/components/admin/news/NewsJobLauncher";
 import { NewsSourceToggle } from "@/components/admin/news/NewsSourceToggle";
 import { adminFetch, requireAdmin } from "@/lib/admin-api";
 import { adminDate } from "@/lib/admin-api/params";
 import { externalNewsUrl } from "@/lib/news-api/params";
+import { sourceCatalogue } from "@/lib/news-api/catalogue";
 import type { NewsSource } from "@/lib/news-api/types";
 
 export const dynamic = "force-dynamic";
@@ -14,7 +16,13 @@ export default async function NewsSourcesPage() {
   const user = await requireAdmin();
   const sources = await adminFetch<NewsSource[]>("/news/sources");
   return <NewsShell username={user.username} current="sources" title="Источники публикаций" description="RSS, Atom и открытые HTML-страницы. Каждый источник проходит проверку перед добавлением.">
-    <div><Link className="admin-button admin-button-primary" prefetch={false} href="/admin/news/sources/new">Добавить источник</Link></div>
+    <div className="news-actions"><Link className="admin-button admin-button-primary" prefetch={false} href="/admin/news/sources/catalogue">Каталог источников ({sourceCatalogue.length})</Link><Link className="admin-button" prefetch={false} href="/admin/news/sources/new">Добавить источник</Link></div>
+    {sources.length > 0 && <section className="admin-section news-stack" aria-labelledby="news-sources-check">
+      <h2 id="news-sources-check">Ручная проверка публикаций</h2>
+      <p className="admin-muted">Соберите новые материалы сейчас, не дожидаясь расписания. Выберите один источник или все включённые. Ход и результат проверки появятся здесь.</p>
+      <NewsJobLauncher sources={sources} />
+      <Link className="admin-link" prefetch={false} href="/admin/news/runs">История проверок</Link>
+    </section>}
     {sources.length ? <table className="admin-table admin-card-table" role="table"><caption>Источников: {sources.length}. Время обходов — UTC.</caption>
       <thead role="rowgroup"><tr role="row"><th scope="col" role="columnheader">Источник</th><th scope="col" role="columnheader">Состояние</th><th scope="col" role="columnheader">Последний обход</th><th scope="col" role="columnheader">Управление</th></tr></thead>
       <tbody role="rowgroup">{sources.map(source => <tr role="row" key={source.id}>
@@ -23,6 +31,6 @@ export default async function NewsSourcesPage() {
         <td role="cell" data-label="Последний успешный обход">{source.last_success_at ? adminDate(source.last_success_at, true) : "Ещё не было"}<small>Новых материалов: {source.last_new_count}</small></td>
         <td role="cell" data-label="Управление"><NewsSourceToggle source={source} /></td>
       </tr>)}</tbody>
-    </table> : <p className="admin-empty">Источников пока нет. Добавьте свой URL или выберите адрес из каталога в форме добавления.</p>}
+    </table> : <p className="admin-empty">Подключённых источников пока нет. Выберите из полного каталога или добавьте свой URL.</p>}
   </NewsShell>;
 }

@@ -5,3 +5,6 @@ __pycache__
 !.env.example
 tests
 *.pyc
+# Content files are a dev-seed only; prod content lives in PostgreSQL.
+content
+uploads

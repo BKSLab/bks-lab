@@ -18,6 +18,10 @@ const nextConfig: NextConfig = {
         source: "/api/health",
         destination: `${process.env.API_PROXY_URL ?? "http://127.0.0.1:8000"}/api/health`,
       },
+      {
+        source: "/uploads/:path*",
+        destination: `${process.env.API_PROXY_URL ?? "http://127.0.0.1:8000"}/uploads/:path*`,
+      },
     ];
   },
 };

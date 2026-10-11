@@ -1,148 +1,127 @@
 # BKS Lab — формат контента
 
-**Версия:** 0.3 (по результатам ревью: reading_time, маппинг статусов проекции)
+**Версия:** 1.0 (источник истины — PostgreSQL; Markdown-файлы — dev-seed)
 
-Контент (статьи блога, заметки, проекты) хранится в репозитории как
-Markdown-файлы с YAML-frontmatter в `backend/content/`. Бэкенд парсит их
-repository-слоем, отдаёт через API (`docs/api_contract.md`) и синхронизирует
-проекцию метаданных в PostgreSQL (`content_items`, см. `docs/architecture.md`
-§3) — для админки и будущего анализа агентами.
+Контент (статьи блога, заметки, проекты) хранится в PostgreSQL:
+таблица `content_items` — основное хранилище (все поля + исходный Markdown
+тела + отрендеренный HTML), `content_revisions` — история версий.
+Материалы создаются и редактируются через админку (`/admin`, эндпоинты
+`docs/api_contract.md` → Admin API → Контент). Бэкенд отдаёт контент через
+API (`docs/api_contract.md`).
 
-## Структура каталогов
+Формат полей и правила Markdown-тела не изменились: тело материала — это
+Markdown (GFM). Ниже описан формат полей; в Markdown-файлах с frontmatter
+он используется только для разового импорта/сида dev-окружения
+(`backend/content/`, см. «Импорт» ниже).
 
-```text
-backend/content/
-  articles/
-    1c-async.md           # имя файла = slug
-    ai-developer.md
-  notes/
-    small-team-deploys.md
-  projects/
-    work-for-everyone.md
-    service-desk.md
-    legal-rag.md
-```
+## Структура хранения
+
+`content_items` (основные поля): `id`, `type` (`article|note|project`),
+`slug` (уникален внутри типа, неизменен), `title`, `category`, `tags`
+(JSONB), `published_at`, `reading_time`, `status`
+(`active|draft|archived`), `word_count`, `content_text` (plain text),
+`excerpt`, `cover_image`, `seo_title`, `seo_description`, `og_image`,
+`related_slug`, `featured`, `sort_order`, `content_markdown`,
+`content_html`, `created_at`, `updated_at`.
 
 Slug: строчные латинские буквы и цифры, разделённые одиночными дефисами;
 длина — 1–200 символов, без дефиса в начале или конце. Уникален внутри
-типа контента. У статей и проектов совпадает с URL на сайте. Файл с
-невалидным slug исключается из API и проекции; генераторы такой slug
-не принимают.
+типа контента. У статей и проектов совпадает с URL на сайте.
 
-## Статья (`articles/<slug>.md`)
+Статус и видимость:
 
-```markdown
----
-title: "Как мы вынесли синхронизации 1С в отдельный асинхронный контур"
-excerpt: "Аннотация 1–3 предложения для карточек и meta description."
-category: development
-published_at: 2026-02-10
-cover_image: "/images/articles/1c-async.webp"
-tags: ["1C", "async", "architecture"]
-reading_time: 8
-seo_title: "… (опционально, default = title)"
-seo_description: "… (опционально, default = excerpt)"
-og_image: "/og/articles/1c-async.jpg (опционально, default = /og/bks-lab-default.jpg)"
-draft: false
----
+| Состояние              | `status`   | Публичный API      |
+| ---------------------- | ---------- | ------------------ |
+| опубликован            | `active`   | да                 |
+| черновик (`draft`)     | `draft`    | нет (виден в админке) |
+| проект в архиве        | `archived` | да (помечен)       |
 
-Текст статьи в Markdown (GFM: таблицы, сноски, code blocks).
-```
+## Статья (`type=article`)
 
 Обязательные поля: `title`, `excerpt`, `category`, `published_at`,
 `cover_image`.
 
 - `reading_time` — **опциональный override**; по умолчанию вычисляется из
   `word_count` (200 слов/мин, минимум 1) — единая механика для всех типов.
-- `draft: true` — исключает статью из публичного API и поиска; в проекцию
-  синхронизируется со `status=draft` (видна в админке).
+  При правке без явного `reading_time` значение пересчитывается из тела.
+- `draft` — исключает статью из публичного API и поиска; в админке видна.
 - `category` — один из: `development`, `ai`, `management`, `thoughts`,
-  `accessibility` (ТЗ §11). Заголовки категорий зашиты на бэкенде, не в файлах.
+  `accessibility` (ТЗ §11). Заголовки категорий зашиты на бэкенде.
+- `seo_title`, `seo_description`, `og_image` — опциональные override
+  (по умолчанию title / excerpt / `/og/bks-lab-default.jpg`).
 
-## Заметка (`notes/<slug>.md`)
+## Заметка (`type=note`)
 
 «Заметка на полях» — короткий материал (1–3 абзаца, ориентир до 500 слов).
 Отдельной страницы в v1 нет: публикуется в ленте `/notes` с якорем
 `#note-<slug>`; последние заметки выводятся на главной и в сайдбаре блога.
 
-```markdown
----
-title: "Почему маленькие команды деплоят чаще"
-published_at: 2026-02-12
-tags: ["management", "deploy"]
-related: "1c-async"
-draft: false
----
-
-Текст заметки в Markdown — короткий, заголовки в теле не используются.
-```
-
 Обязательные поля: `title`, `published_at`.
 
 - `tags` — опционально, свободный список (категорий у заметок нет).
-- `related` — опционально, slug статьи: в ленте заметка показывает ссылку
-  «по теме: …» на связанную статью. Битая ссылка не блокирует публикацию
-  (логируется, `related_article` в API = null).
-- Обложки и категории нет. `excerpt` = первый абзац (вычисляется),
-  `reading_time` = из `word_count` (минимум 1).
+- `related_slug` — опционально, slug статьи: в ленте заметка показывает
+  ссылку «по теме: …» на связанную статью. Битая ссылка не блокирует
+  публикацию (логируется, `related_article` в API = null).
+- Обложки и категории нет. `excerpt` = первый абзац (вычисляется при
+  сохранении), `reading_time` = из `word_count` (минимум 1).
 
-## Проект (`projects/<slug>.md`)
+## Проект (`type=project`)
 
-```markdown
----
-title: "Работа для всех"
-excerpt: "Платформа с вакансиями для людей с инвалидностью и AI-помощником."
-cover_image: "/images/projects/work-for-everyone.webp"
-tags: ["FastAPI", "Next.js", "PostgreSQL", "AI"]
-status: active
-featured: true
-order: 1
-seo_title: "… (опционально)"
-seo_description: "… (опционально)"
-draft: false
----
+Обязательные поля: `title`, `excerpt`, `cover_image`, `tags` (минимум 1),
+`status` (`active|archived`), `featured`, `sort_order`.
 
-Описание проекта в Markdown: проблема, решение, архитектура, результаты.
-```
-
-Обязательные поля: `title`, `excerpt`, `cover_image`, `tags`, `status`,
-`featured`, `order`.
-
-- `status`: `active | archived` (`archived` — только у проектов).
-- `featured: true` + `order` — выбор и порядок проектов на главной (ТЗ §10).
-- Стартовые проекты (ТЗ §10): `work-for-everyone`, `service-desk`, `legal-rag`.
+- `featured: true` + `sort_order` — выбор и порядок проектов на главной
+  (ТЗ §10).
+- `published_at` и `reading_time` у проектов не используются (null).
 
 ## Правила Markdown-тела
 
-- Заголовки внутри статьи/проекта начинаются с `##` (H1 — `title` из
-  frontmatter, рендерится страницей; иерархия заголовков — требование ТЗ §14).
+- Заголовки внутри статьи/проекта начинаются с `##` (H1 — `title`,
+  рендерится страницей; иерархия заголовков — требование ТЗ §14).
   В заметках заголовки не используются.
 - Изображения внутри текста — с осмысленным alt; декоративные — пустой alt.
-- Пути к изображениям — абсолютные от web-root (`/images/...`), файлы лежат в
-  `frontend/public/` по слотам дизайн-ТЗ §7.
+- Пути к изображениям — абсолютные от web-root: дизайнерские ассеты
+  `/images/...` из `frontend/public/`, загруженные через админку —
+  `/uploads/<section>/<file>.webp` (загрузка: `POST /api/admin/content/images`,
+  конвертация в WebP на сервере).
+- Отдельная строка `::ad` — маркер внутритекстового рекламного блока
+  (только статьи, не более двух, не первым и не последним блоком; правила
+  проверяются сервером при сохранении). Рендерится в плейсхолдер
+  `<div data-ad-slot="article-inline"></div>`, который фронтенд заменяет на
+  `AdSlot`.
 - GFM: таблицы, code fences с указанием языка, сноски. Raw HTML в Markdown
   запрещён (санитизация всё равно вырежет).
 
-## Проекция в БД
+## Ревизии
 
-Механика синхронизации (триггер, single-flight, транзакция) — в
-`docs/architecture.md` §3 «Механика синхронизации контента». Маппинг в
-`content_items`:
+Каждое успешное сохранение (создание, правка, смена статуса, импорт) пишет
+снапшот всех редактируемых и производных полей в `content_revisions`
+(`item_id`, `revision_no` — сквозной номер внутри материала, начиная с 1,
+`word_count`, `created_at`). Строка и ревизия записываются одной
+транзакцией. Откат = копирование снапшота выбранной ревизии в
+`content_items` + новая ревизия с тем же содержимым — история не
+перезаписывается. Удаление материала удаляет ревизии каскадом.
 
-| Источник (frontmatter)          | `content_items.status` | Публичный API |
-| ------------------------------- | ---------------------- | ------------- |
-| обычный файл                    | `active`               | да            |
-| `draft: true`                   | `draft`                | нет           |
-| проект `status: archived`       | `archived`             | да (помечен)  |
+## Импорт (seed dev-окружения)
 
-- Файл, не прошедший валидацию, исключается из выдачи и **удаляется** из
-  кэша и `content_items` (в транзакции рескана); ошибка логируется.
-- Nullable-поля проекции: `category` (только статьи), `reading_time`
-  (статьи/заметки).
-- Это read-model: правка БД напрямую не влияет на сайт и будет затёрта
-  следующей синхронизацией.
+Файлы `backend/content/{articles,notes,projects}/<slug>.md` с
+YAML-frontmatter — только разовый источник для сидирования: скрипт
+`python -m scripts.import_content_to_db` (внутри backend-контейнера)
+валидирует их схемами `src/schemas/frontmatter.py` и делает upsert в
+`content_items` по `(type, slug)` + ревизию №1. Скрипт идемпотентен:
+повторный запуск без изменений файла ничего не пишет. Невалидные файлы
+пропускаются с ошибкой в отчёте. Приложение эти файлы не читает; в
+prod-образ они не попадают.
+
+Frontmatter-поля файлов соответствуют полям Admin API (`related` →
+`related_slug`, `order` → `sort_order`, `status` проекта → lifecycle для
+вычисления `status`).
 
 ## Валидация
 
-Repository при рескане валидирует frontmatter Pydantic-схемой. Тесты бэкенда
-включают фикстуру с валидным и невалидным frontmatter.
+- Создание и правка через Admin API валидируются Pydantic-схемами по типу
+  контента (обязательные поля — как выше); итоговое состояние при PATCH
+  валидируется после слияния с текущим.
+- `content_html` рендерится при сохранении существующим пайплайном
+  `markdown-it-py` и хранится в БД; на чтении повторный рендер не нужен.
+- Импортёр валидирует frontmatter схемами `src/schemas/frontmatter.py`.

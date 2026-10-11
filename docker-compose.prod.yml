@@ -14,8 +14,6 @@ x-backend-environment: &backend-environment
   POSTGRES_DB: ${POSTGRES_DB:-bkslab}
   POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
   STATS_SECRET: ${STATS_SECRET:?Set STATS_SECRET}
-  CONTENT_DIR: /app/content
-  CONTENT_SYNC_TTL_SECONDS: "5"
   NEWS_ENABLED: ${NEWS_ENABLED:-true}
   NEWS_TIMEZONE: ${NEWS_TIMEZONE:-Europe/Samara}
   NEWS_SCHEDULE: '${NEWS_SCHEDULE:-["08:00","14:00","20:00"]}'
@@ -88,10 +86,13 @@ services:
       SMTP_USE_TLS: ${SMTP_USE_TLS:-false}
       SMTP_START_TLS: ${SMTP_START_TLS:-true}
       SMTP_TIMEOUT: "10"
+      FRONTEND_INTERNAL_URL: ${FRONTEND_INTERNAL_URL:-http://frontend:3000}
+      REVALIDATE_SECRET: ${REVALIDATE_SECRET:?Set REVALIDATE_SECRET}
+    volumes:
+      # Editor uploads: writable despite read_only; nginx serves them at /uploads/.
+      - uploads:/app/uploads
     depends_on:
       db: {condition: service_healthy}
-    volumes:
-      - ./backend/content:/app/content:ro
     read_only: true
     tmpfs: [/tmp]
     cap_drop: [ALL]
@@ -138,6 +139,7 @@ services:
         NEXT_PUBLIC_ADS_ENABLED: ${NEXT_PUBLIC_ADS_ENABLED:-false}
         NEXT_PUBLIC_YANDEX_AD_SIDEBAR_ID: ${NEXT_PUBLIC_YANDEX_AD_SIDEBAR_ID:-}
         NEXT_PUBLIC_YANDEX_AD_ARTICLE_ID: ${NEXT_PUBLIC_YANDEX_AD_ARTICLE_ID:-}
+        NEXT_PUBLIC_YANDEX_AD_INLINE_ID: ${NEXT_PUBLIC_YANDEX_AD_INLINE_ID:-}
         NEXT_PUBLIC_YANDEX_AD_NOTES_ID: ${NEXT_PUBLIC_YANDEX_AD_NOTES_ID:-}
     restart: unless-stopped
     environment:
@@ -172,6 +174,7 @@ services:
       - ./infra/nginx/common:/etc/nginx/snippets:ro
       - certificates:/etc/letsencrypt:ro
       - acme:/var/www/certbot:ro
+      - uploads:/var/www/bks-lab-uploads:ro
     depends_on:
       frontend: {condition: service_healthy}
     healthcheck:
@@ -195,6 +198,7 @@ services:
 
 volumes:
   pg_data:
+  uploads:
   certificates:
   acme:
 

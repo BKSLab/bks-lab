@@ -1,6 +1,6 @@
 # BKS Lab — архитектура
 
-**Версия:** 0.8 (News Analyzer и редакционный центр в существующей админке)
+**Версия:** 0.9 (контент в PostgreSQL: редактор в админке, ревизии, revalidate-webhook)
 **Статус:** базовый сайт реализован; News Analyzer проходит интеграционную
 приёмку. Состояние проверок и оставшаяся приёмка — в
 `docs/implementation_plan.md`, развёртывание — в `docs/deployment.md`.
@@ -46,11 +46,12 @@ PostgreSQL 16, slowapi, Alembic — **берём из референса** (см
 браузер
    │ 443 (TLS)
    ▼
-nginx ─┬─ /api/* ─────────► backend (FastAPI) ──┬─► backend/content/*.md (источник истины)
-       │   (включая /api/admin/*)               └─► PostgreSQL (контейнер db):
-       ├─ /admin, /, /blog, … ─► frontend (Next.js, ISR/SSG)      page_views, subscribers,
-       │                                  │ серверные fetch       content_items, admin_sessions
-       │                                  └──────────────────────► backend (API_INTERNAL_URL)
+nginx ─┬─ /api/* ─────────► backend (FastAPI) ──► PostgreSQL (контейнер db):
+       │   (включая /api/admin/*)                     content_items (источник
+       ├─ /admin, /, /blog, … ─► frontend (Next.js, ISR/SSG)  истины контента),
+       │                                  │ серверные fetch     content_revisions,
+       │                                  └──────────────────────► page_views, subscribers,
+       ▼                                    backend (API_INTERNAL_URL)  admin_sessions
        ▼
 certbot (Let's Encrypt)
 
@@ -94,8 +95,8 @@ backend/
                     # stats.py, feedback.py, admin/ (auth.py, stats.py, content.py, subscribers.py)
     services/       # бизнес-логика: ArticleService, NoteService, ProjectService,
                     # StatsService, AdminAuthService, ...
-    repositories/   # Markdown*Repository (файлы), StatsRepository,
-                    # ContentItemRepository, AdminSessionRepository (SQLAlchemy)
+    repositories/   # ContentItemRepository (CRUD контента), ContentRevisionRepository,
+                    # StatsRepository, AdminSessionRepository (SQLAlchemy)
     db/             # engine/session (asyncpg), models/, alembic/ (миграции)
     dependencies/   # DI: db_session.py, repositories.py, services.py, auth.py (require_admin)
     background_tasks/  # периодические задачи: ретенция статистики, чистка просроченных сессий
@@ -103,32 +104,29 @@ backend/
     core/           # settings (pydantic-settings), логирование
     exceptions/     # доменные исключения со status_code/detail
     utils/          # markdown-парсинг (frontmatter, рендеринг в HTML)
-  content/
-    articles/       # *.md с frontmatter
-    notes/          # *.md — короткие заметки
-    projects/       # *.md с frontmatter
-  scripts/          # new_article.py, new_project.py, new_note.py
+  content/          # dev-seed: Markdown + frontmatter для scripts/import_content_to_db.py;
+                    # приложение эти файлы не читает, в prod-образ не попадают
+  scripts/          # new_article.py, new_project.py, new_note.py, import_content_to_db.py
   tests/
   requirements.txt
   Dockerfile
 ```
 
-Цепочка: `Endpoint → Service → Repository → {Markdown-файлы | PostgreSQL}`.
+Цепочка: `Endpoint → Service → Repository → PostgreSQL`.
 Правила:
 
 - Эндпоинты тонкие: валидация входа (Pydantic), вызов сервиса, перевод
   доменных исключений в HTTPException.
-- Репозиторий — единственное место, знающее про хранилище (файловая система
-  или SQLAlchemy). Замена хранилища не трогает сервисы и API.
+- Репозиторий — единственное место, знающее про хранилище. Замена
+  хранилища не трогает сервисы и API.
 - DI — через `Annotated[..., Depends(...)]` в `dependencies/`; это же шов
   для API-тестов через `app.dependency_overrides`.
 - Конфиг — pydantic-settings, `.env` в корне backend, доступ через
   `@lru_cache get_settings()`. `SecretStr` — только для реальных секретов:
   пароль БД, SMTP-пароль, пароль админки, `stats_secret` (мастер-секрет
   хэширования посетителей), `revalidate_secret` (вебхук фронтенда, §4).
-- Backend работает в **одном воркере Hypercorn**: in-memory кэш контента и
-  счётчики slowapi — per-process; горизонтальное масштабирование не
-  требуется (§5).
+- Backend работает в **одном воркере Hypercorn**: счётчики slowapi —
+  per-process; горизонтальное масштабирование не требуется (§5).
 
 ### Типы контента
 
@@ -145,61 +143,73 @@ backend/
 `/notes` с якорями `#note-<slug>`, блок последних заметок на главной и в
 сайдбаре блога. Поле `related` связывает заметку со статьёй.
 
-### Хранение контента и процесс публикации — РЕШЕНИЕ
+### Хранение контента и процесс публикации — РЕШЕНИЕ (обновлено, редактор контента)
 
-**Утверждено: Markdown-файлы в git — источник истины для всех типов
-контента (как в референсном проекте).**
+**Источник истины — PostgreSQL** (таблица `content_items`); Markdown
+остаётся форматом разметки тела. Материалы создаются и правятся через
+редактор в админке (`/admin/content`, API — `docs/api_contract.md`).
+Файлы `backend/content/` — только dev-seed для разового импорта
+(`python -m scripts.import_content_to_db`), приложением не читаются.
 
-Процесс добавления публикации:
+Процесс публикации:
 
-1. Скрипт-генератор (`backend/scripts/new_article.py`, `new_project.py`,
-   `new_note.py`) создаёт `<slug>.md` с шаблоном валидного frontmatter.
-2. Текст пишется в IDE с Markdown-предпросмотром.
-3. Публикация: `git push` → на сервере deploy-скрипт делает `git pull`
-   (content смонтирован volume'ом) и вызывает revalidate-вебхук фронтенда
-   (§4 «Стратегия рендеринга»). Backend перечитывает файлы по mtime — в API
-   материал виден сразу; на сайте — после revalidate (секунды) или очередного
-   ISR-окна. Перезапуск и пересборка не требуются.
+1. Материал создаётся в админке как черновик, правится, переводится в
+   `active` сменой статуса.
+2. Каждое сохранение валидируется схемой типа, пересчитывает производные
+   поля (рендер `content_markdown` → `content_html`, `content_text`,
+   `word_count`, `reading_time`, у заметок — `excerpt` из первого абзаца) и
+   **одной транзакцией** пишет строку и снапшот в `content_revisions`.
+3. После успешной мутации backend вызывает revalidate-вебхук фронтенда
+   (§4 «Стратегия рендеринга»): `POST {FRONTEND_INTERNAL_URL}/api/revalidate`
+   с `Authorization: Bearer {REVALIDATE_SECRET}`. Ошибка вебхука не отменяет
+   сохранение — ISR-кеш истечёт сам (`revalidate = 300`).
 
-### Механика синхронизации контента (кэш + проекция)
+### Загруженные изображения (`media_files`, `/uploads/`)
 
-Протокол обновления in-memory кэша и read-model `content_items` — единый:
+Изображения для материалов загружаются через редактор
+(`POST /api/admin/content/images`, multipart): backend валидирует файл
+Pillow (формат по сигнатуре: jpeg/png/webp, лимит исходника `MEDIA_MAX_BYTES`
+= 5 МБ), конвертирует в WebP с даунскейлом до `MEDIA_MAX_WIDTH` = 1920px и
+кладёт в `MEDIA_DIR` (по умолчанию `backend/uploads`, prod — volume
+`uploads` в `/app/uploads`) под именем `<slug>-<hex>.webp` в подкаталоге
+секции (`articles|notes|projects|covers|shared`). Метаданные — таблица
+`media_files` (`path` unique, `original_name`, `mime`, `size_bytes`,
+`width`, `height`, `created_at`). Раздача: dev — StaticFiles backend'а на
+`/uploads/`, prod — nginx из того же volume с `Cache-Control: immutable`.
+Дизайнерские ассеты `frontend/public/images/` не затрагиваются. Volume
+`uploads` включён в `scripts/backup-database.sh` (tar-архив рядом с
+дампом БД).
 
-- **Триггер:** при первом запросе API после TTL (5 с) проверяется mtime
-  каталогов контента; изменение → рескан соответствующего типа.
-- **Single-flight:** рескан выполняется под `asyncio.Lock`; параллельные
-  запросы не запускают второй рескан. При первом заполнении они дожидаются
-  готового кэша или получают ошибку синхронизации вместо пустого ответа.
-- **Полный рескан типа:** парсинг всех файлов типа; `content_hash`
-  пропускает неизменённые файлы при записи в БД.
-- **Одна транзакция:** upsert изменённых + удаление записей исчезнувших и
-  ставших невалидными файлов — атомарно. При ошибке БД кэш не обновляется,
-  повтор при следующем триггере (кэш и проекция не расходятся).
-- **Draft:** файлы с `draft: true` синхронизируются в `content_items` со
-  `status=draft` (видны в админке), но исключаются из публичного API и
-  поиска. `archived` — только у проектов. Файл, не прошедший валидацию,
-  удаляется из кэша и проекции, ошибка логируется.
-- **Ошибки файловой системы:** отсутствующий или недоступный каталог/файл
-  не считается удалённым контентом: сохраняются предыдущие кэш и проекция,
-  при холодном старте возвращается ошибка. Синтаксически повреждённый YAML
-  считается невалидным отдельным файлом и не прерывает обработку остальных.
-- **`reading_time`** вычисляется из `word_count` (200 слов/мин, минимум 1)
-  для всех типов; поле `reading_time` во frontmatter статей — опциональный
-  override.
+### Внутритекстовая реклама (маркер `::ad`)
 
-### Проекция контента в БД — РЕШЕНИЕ
+Отдельная строка `::ad` в теле статьи рендерится пайплайном Markdown в
+плейсхолдер `<div data-ad-slot="article-inline"></div>`; фронтенд
+(`ContentHtml`) расщепляет HTML по плейсхолдерам и между частями рендерит
+`AdSlot` с placement `article-inline`. Ограничения проверяются сервером при
+создании/правке (422): только статьи, не более двух маркеров, маркер не
+может быть первым или последним блоком текста; маркеры внутри code fences
+не считаются. Остальные правила РСЯ (§4 «Реклама») сохраняются.
 
-**Утверждено владельцем: метаданные и текст контента дублируются в
-PostgreSQL для админки и будущего анализа моделями/агентами.**
+### Ревизии контента
 
-Это **read-model, а не источник истины**: файлы → проекция, никогда наоборот.
+`content_revisions`: `id`, `item_id` (FK → `content_items.id`,
+ON DELETE CASCADE), `revision_no` (сквозной номер внутри материала),
+`snapshot` (JSONB — все редактируемые и производные поля, включая
+`content_markdown`), `word_count`, `created_at`. Уникальный индекс
+`(item_id, revision_no)`. Откат = копирование снапшота в `content_items` +
+новая ревизия с тем же содержимым; история не перезаписывается.
 
-- Таблица `content_items`: `id`, `type` (`article|note|project`), `slug`,
-  `title`, `category` (nullable — только статьи), `tags` (JSONB),
-  `published_at`, `reading_time` (nullable — статьи/заметки),
-  `status` (`active|draft|archived`), `word_count`, `content_text`
-  (plain text из Markdown — для анализа), `content_hash`, `synced_at`.
-  Уникальность: `(type, slug)`.
+### Таблица контента `content_items` — РЕШЕНИЕ
+
+- Колонки: `id`, `type` (`article|note|project`), `slug`, `title`,
+  `category` (nullable — только статьи), `tags` (JSONB), `published_at`,
+  `reading_time` (nullable — статьи/заметки), `status`
+  (`active|draft|archived`), `word_count`, `content_text` (plain text — для
+  поиска и будущего анализа), `excerpt`, `cover_image`, `seo_title`,
+  `seo_description`, `og_image`, `related_slug`, `featured`, `sort_order`,
+  `content_markdown`, `content_html`, `created_at`, `updated_at`.
+  Уникальность: `(type, slug)`. `id` стабилен — на него ссылается
+  статистика просмотров, поэтому импорт делает upsert в существующие строки.
 - Связь со статистикой: `page_views.path` + `page_views.note_slug`
   сопоставляются с `content_items.slug` по правилам из `api_contract.md`
   (`/blog/post/<slug>`, `/projects/<slug>`, `/notes` + `note_slug`).
@@ -218,8 +228,8 @@ PostgreSQL для админки и будущего анализа моделя
   через `backend/.env`. Подключение — async SQLAlchemy + asyncpg.
 - **Alembic** — миграции схемы, прогон при старте контейнера backend
   (`alembic upgrade head` в entrypoint, как в референсе).
-- Модели: `page_views`, `subscribers` (этап P1), `content_items` (проекция),
-  `admin_sessions` (админка).
+- Модели: `page_views`, `subscribers` (этап P1), `content_items` (контент),
+  `content_revisions` (история версий), `admin_sessions` (админка).
 - **`page_views`**: `id`, `viewed_at`, `path` (без query и якоря),
   `note_slug` (nullable — якорь `#note-<slug>` из ленты заметок),
   `referrer_domain` (nullable, max 255), `visitor_hash`.
@@ -416,11 +426,11 @@ frontend/
 - **On-demand revalidation для мгновенной публикации:** route handler
   `app/api/revalidate/route.ts` с секретом (`revalidate_secret`) вызывает
   `revalidateTag`/`revalidatePath`. Все запросы `lib/api` помечены
-  `next: { tags: ['articles' | 'notes' | 'projects'] }`. Deploy-скрипт после
-  `git pull` вызывает `scripts/publish-content.sh`. Webhook принимает
+  `next: { tags: ['articles' | 'notes' | 'projects'] }`. Webhook принимает
   `Authorization: Bearer <REVALIDATE_SECRET>` (не менее 32 случайных символов),
-  секрет не передаётся в URL. Скрипт сначала обновляет файловый кэш backend,
-  затем сбрасывает теги/пути Next.js и прогревает основные страницы и sitemap.
+  секрет не передаётся в URL. Его вызывает backend после каждой мутации
+  контента в редакторе (§3); ошибка webhook логируется и не валит
+  сохранение — ISR-кэш истечёт сам.
 - **SSR (`force-dynamic`) отклонён** для публичных страниц. **Админка —
   наоборот, динамическая** (`force-dynamic` на страницах `(admin)`): данные
   всегда свежие, кэширование не нужно, доступ всё равно закрыт.

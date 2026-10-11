@@ -60,12 +60,47 @@ class ContentSettings(BaseSettings):
         env_prefix="CONTENT_", env_file=".env", extra="ignore"
     )
 
-    # Directory with Markdown content (articles/notes/projects subdirectories).
+    # Directory with Markdown content (articles/notes/projects subdirectories);
+    # read only by the one-time importer, never by the running application.
     dir: Path = BACKEND_ROOT / "content"
-    # How often (seconds) API requests re-check content directories mtime.
-    sync_ttl_seconds: float = 5.0
     # Words per minute used to derive reading_time from word_count.
     words_per_minute: int = 200
+
+
+class MediaSettings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_prefix="MEDIA_", env_file=".env", extra="ignore"
+    )
+
+    # Uploaded images root; served at /uploads/ (backend in dev, nginx in prod).
+    dir: Path = BACKEND_ROOT / "uploads"
+    # Reject larger originals before decoding.
+    max_bytes: int = Field(default=5 * 1024 * 1024, ge=1)
+    # Wider images are downscaled; height follows the aspect ratio.
+    max_width: int = Field(default=1920, ge=100)
+
+
+class RevalidateSettings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_prefix="REVALIDATE_", env_file=".env", extra="ignore", populate_by_name=True
+    )
+
+    # Base URL of the frontend container, e.g. http://frontend:3000;
+    # the webhook is POST {frontend_internal_url}/api/revalidate.
+    frontend_internal_url: str | None = Field(
+        default=None, validation_alias="FRONTEND_INTERNAL_URL"
+    )
+    # Bearer secret shared with the frontend revalidate route.
+    secret: SecretStr | None = None
+
+    @property
+    def configured(self) -> bool:
+        """Both halves of the pair must be set for the webhook to run."""
+        return bool(
+            self.frontend_internal_url
+            and self.secret
+            and self.secret.get_secret_value()
+        )
 
 
 class StatsSettings(BaseSettings):
@@ -143,6 +178,8 @@ class Settings:
         self.app = AppSettings()
         self.db = DBSettings()
         self.content = ContentSettings()
+        self.media = MediaSettings()
+        self.revalidate = RevalidateSettings()
         self.stats = StatsSettings()
         self.admin = AdminSettings()
         self.smtp = SMTPSettings()

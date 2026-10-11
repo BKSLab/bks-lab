@@ -55,9 +55,42 @@ export interface AdminContentItem {
 }
 
 export interface AdminContentDetail extends AdminContentItem {
-  synced_at: string;
-  content_hash: string;
+  excerpt: string | null;
+  cover_image: string | null;
+  seo_title: string | null;
+  seo_description: string | null;
+  og_image: string | null;
+  related_slug: string | null;
+  featured: boolean;
+  sort_order: number | null;
+  reading_time: number | null;
+  content_markdown: string;
+  created_at: string;
+  updated_at: string;
   views_timeseries_30d: TimeSeriesPoint[];
+}
+
+export interface ContentRevisionInfo {
+  revision_no: number;
+  word_count: number;
+  created_at: string;
+}
+
+export interface ContentRevisionSnapshot extends ContentRevisionInfo {
+  snapshot: AdminContentDetail;
+}
+
+export type ContentImageSection = "articles" | "notes" | "projects" | "covers" | "shared";
+
+export interface AdminContentImage {
+  id: number;
+  path: string;
+  original_name: string;
+  mime: string;
+  size_bytes: number;
+  width: number;
+  height: number;
+  created_at: string;
 }
 
 export interface AdminSubscriber {

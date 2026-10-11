@@ -21,7 +21,12 @@ export default async function AdminContentPage({ searchParams }: { searchParams:
   const data = await adminFetch<AdminPaged<AdminContentItem>>(adminHref("/content", { ...filters, page, page_size: 20 }));
 
   return <AdminShell username={user.username} current="content">
-    <header className="admin-heading"><h1>Материалы</h1><p className="admin-muted">Статьи, заметки и проекты, включая черновики. Здесь доступен только просмотр; тексты редактируются в Markdown-файлах проекта.</p></header>
+    <header className="admin-heading"><h1>Материалы</h1><p className="admin-muted">Статьи, заметки и проекты, включая черновики. Материалы создаются и редактируются здесь, в панели.</p></header>
+    <div className="editor-type-links" aria-label="Создание материала">
+      <Link href="/admin/content/new?type=article" prefetch={false} className="admin-button admin-button-primary">Новая статья</Link>
+      <Link href="/admin/content/new?type=note" prefetch={false} className="admin-button">Новая заметка</Link>
+      <Link href="/admin/content/new?type=project" prefetch={false} className="admin-button">Новый проект</Link>
+    </div>
     <section className="admin-section" aria-label="Список материалов">
       <form action="/admin/content" method="get" className="admin-filters">
         <div className="admin-field"><label htmlFor="admin-content-type">Тип</label><select name="type" id="admin-content-type" defaultValue={type}>
@@ -36,12 +41,13 @@ export default async function AdminContentPage({ searchParams }: { searchParams:
       </form>
       {data.items.length ? <table className="admin-table admin-card-table" role="table">
         <caption>Найдено материалов: {adminNumber(data.total)}</caption>
-        <thead role="rowgroup"><tr role="row"><th role="columnheader" scope="col">Материал</th><th role="columnheader" scope="col">Статус</th><th role="columnheader" scope="col">Дата</th><th role="columnheader" scope="col">Просмотры за 30 дней</th></tr></thead>
+        <thead role="rowgroup"><tr role="row"><th role="columnheader" scope="col">Материал</th><th role="columnheader" scope="col">Статус</th><th role="columnheader" scope="col">Дата</th><th role="columnheader" scope="col">Просмотры за 30 дней</th><th role="columnheader" scope="col">Действия</th></tr></thead>
         <tbody role="rowgroup">{data.items.map((item) => <tr role="row" key={item.id}>
           <th role="rowheader" scope="row" className="admin-cell-title"><Link prefetch={false} href={`/admin/content/${item.id}`}>{item.title}</Link><span className="admin-type">{contentTypeLabels[item.type]}</span></th>
           <td role="cell" data-label="Статус"><span className="admin-status">{contentStatusLabels[item.status]}</span></td>
           <td role="cell" data-label="Дата">{item.published_at ? <time dateTime={item.published_at}>{adminDate(item.published_at)}</time> : "Не указана"}</td>
           <td role="cell" data-label="Просмотры за 30 дней" className="admin-numeric">{adminNumber(item.views_30d)}</td>
+          <td role="cell" data-label="Действия"><Link prefetch={false} className="admin-link" href={`/admin/content/${item.id}/edit`}>Править</Link></td>
         </tr>)}</tbody>
       </table> : <p className="admin-empty">Материалы не найдены. Измените фильтры или поисковый запрос.</p>}
       <AdminPagination path="/admin/content" {...data} params={filters} />

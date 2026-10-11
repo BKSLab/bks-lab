@@ -43,16 +43,14 @@ def test_every_admin_endpoint_depends_on_require_admin():
         return {dependant.call}.union(*(dependency_calls(child) for child in dependant.dependencies))
 
     routes = [route for route in app.routes if isinstance(route, APIRoute) and route.path.startswith("/api/admin/")]
-    assert len([route for route in routes if not route.path.startswith("/api/admin/news/")]) == 10
+    assert len([route for route in routes if not route.path.startswith("/api/admin/news/")]) == 20
     for route in routes:
         if route.path == "/api/admin/auth/login":
             continue
         assert require_admin in dependency_calls(route.dependant), route.path
         if route.path.startswith("/api/admin/news/"):
             continue
-        assert route.methods <= {"GET", "POST"}
-        if route.methods == {"POST"}:
-            assert route.path == "/api/admin/auth/logout"
+        assert route.methods <= {"GET", "POST", "PATCH", "DELETE"}
 
 
 @pytest.mark.parametrize("path", PROTECTED)

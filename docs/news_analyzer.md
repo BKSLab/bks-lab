@@ -122,12 +122,31 @@ docker compose ps
 docker compose logs --tail 50 news-analyzer-scheduler
 ```
 
-Войдите в `/admin/news/sources/new`, укажите адрес или выберите подсказку
-из каталога. «Проверить источник» создаёт фоновое задание; после успешного
-предпросмотра настройте рубрики, темы, доверие и регулярный сбор, затем
+Во вкладке «Каталог» (`/admin/news/sources/catalogue`) доступны **все 98
+позиций** из таблиц разделов 1–7 `search_news/BKS_Lab_AI_Sources_Research.md`:
+15 лабораторий, 15 инженерных источников, 11 о бизнесе, 16 об обществе,
+16 авторских сайтов, 15 русскоязычных ресурсов и 10 API/поисковых ресурсов.
+Повторные упоминания авторов в разных разделах сохранены. Доступны поиск по
+названию, описанию и всем URL, фильтры по разделу, приоритету A/B/C и способу
+использования. Исходные описания, способы подключения и дополнительные
+ссылки перенесены без сокращения; тест сверяет их с Markdown.
+
+Для RSS/Atom и страниц публикаций «Проверить и подключить» открывает
+`/admin/news/sources/new?catalogue=<id>` с заполненными названием, адресом,
+способом получения и признаком поставщика. API и ресурсы для чтения видны
+в том же каталоге с ограничениями подключения; отдельные API-адаптеры не
+реализованы. Уже сохранённый URL (включая адрес ленты или альтернативный
+адрес из списка) ведёт к настройкам источника и показывает статус сбора.
+
+В `/admin/news/sources/new` также можно указать свой адрес или выбрать
+источник из сгруппированного списка. «Проверить источник» создаёт фоновое
+задание; после успешного предпросмотра настройте рубрики, темы, доверие и
+регулярный сбор, затем
 сохраните. Начальный интервал — 6 часов. Проверка только показывает
 материалы; их сохранение начинается при ручном или плановом обходе.
 Изменение URL, способа получения или CSS-селекторов требует новой проверки.
+Выбор другого пункта каталога сбрасывает прежний предпросмотр и результат
+проверки. Каталог не создаёт записей в БД и не включает сбор автоматически.
 
 По умолчанию обходы запускаются в `08:00`, `14:00`, `20:00`,
 `Europe/Samara`. Расписание и редакционные настройки применяются без
@@ -137,7 +156,12 @@ docker compose logs --tail 50 news-analyzer-scheduler
 уже взятые задания завершаются. Ручная проверка, сбор выбранного источника
 и повторный анализ доступны независимо от этого переключателя.
 
-В «Запусках» можно собрать все активные источники или один выбранный.
+В «Источниках» над списком доступен блок «Ручная проверка публикаций»:
+выберите все активные источники или один выбранный и нажмите «Проверить
+сейчас». Задание выполняется в фоне; состояние, счётчики результата и
+ссылка на задание появляются под кнопкой. Пока задание выполняется,
+повторный запуск из этого блока заблокирован. «История проверок» ведёт в
+«Запуски», где также доступен ручной сбор.
 Открытую вкладку разрешается закрыть: задание остаётся в PostgreSQL.
 Новые материалы сначала сохраняются, затем отдельные задания передают
 их модели. «Все материалы» включает ожидающие анализа; «Для статей» и
@@ -195,11 +219,238 @@ HTML — best effort с настраиваемыми селекторами; с�
 отдельный адаптер. Ошибочный источник не мешает сохранить результаты
 успешных источников.
 
+HTTP-клиент принимает `gzip` (включая `x-gzip`) и `deflate` (zlib/raw).
+`NEWS_HTTP_MAX_RESPONSE_BYTES` (по умолчанию 2 МиБ) ограничивает **и скачанные,
+и распакованные** байты независимо друг от друга. Распаковка потоковая,
+с ограничением выделяемого объёма; повреждённые и оборванные потоки
+отклоняются. Brotli, Zstandard и многослойное сжатие не поддерживаются.
+Проверки DNS/IP, TLS, robots.txt и перенаправлений действуют также для лент
+и отдельных страниц материалов. Недоступный robots.txt обозначается
+отдельно от явного запрета обхода; ни один из этих случаев не обходится.
+
+При автоматическом разборе HTML используются заголовки и даты карточек,
+сохраняются заголовки внутри `article`; навигация и ссылки на файлы не
+считаются публикациями. Статический HTML внутри `noscript` можно разобрать
+без исполнения JavaScript. Если опубликованная на странице RSS/Atom-лента
+недоступна, но HTML содержит карточки, предпросмотр возвращает их с
+предупреждением. Явно выбранный RSS не подменяется HTML.
+
 Фоновая очистка выполняется раз в час. По умолчанию текст удаляется через
 90 дней без повторного обнаружения, старые задания, обходы и история —
 через 180 дней. Последние анализ и редакторское решение сохраняются.
 Резервная копия общей БД включает редакционные данные; порядок описан в
 [инструкции развёртывания](deployment.md).
+
+## Проверка совместимости каталога
+
+Повторяемый аудит использует тот же `NewsSourceClient` и HTTP-защиты, что
+scheduler. Он проверяет все уникальные основные адреса, RSS и дополнительные
+ссылки из каталога; дубли авторов сопоставляются с исходными строками.
+Справочные сайты и API проверяются на доступность отдельно: HTTP 200 для
+документации не означает наличия готового адаптера API.
+
+Из корня проекта (PowerShell, запущен dev Compose):
+
+```powershell
+Get-Content -Raw frontend/src/lib/news-api/catalogue.ts | docker compose exec -T backend python -m scripts.audit_news_catalogue --catalogue - --output /tmp/news-catalogue-audit.json --collect
+docker compose cp backend:/tmp/news-catalogue-audit.json "$env:TEMP/news-catalogue-audit.json"
+```
+
+Это чтение внешних ресурсов без записи источников/материалов в БД и без LLM.
+`--collect` дополнительно получает до трёх материалов каждого найденного
+источника, включая попытку загрузить текст; для проверки старых блогов
+используется окно 3650 дней, рабочая настройка 30 дней не меняется.
+Ошибка догрузки текста сохраняется в `collection.warnings`, ошибка этапа
+сбора — в `collection.status`; успешный предпросмотр от этого не становится
+успешной проверкой текста. Предпросмотр содержит до пяти карточек.
+По умолчанию одновременно проверяются до пяти адресов, общий предел на
+адрес — 120 секунд; обычные лимиты HTTP-клиента сохраняются. Завершение
+команды означает завершение аудита: результаты надо смотреть в `summary`
+и `results`, включая `failed`/`error`.
+
+Для адресного повторения: `--only labs-deepmind,labs-anthropic`. Необязательный
+`--documents-dir /tmp/news-audit-documents` сохраняет публичные документы
+для локального разбора; их не следует добавлять в git. JSON-отчёт содержит
+короткие предпросмотры и разрешённые HTTP-заголовки, без cookies и секретов.
+
+### Результаты живого аудита, 08.10.2026
+
+Проверены **98 строк** каталога: **102 исходных уникальных адреса** и четыре
+проверенные замены — **106 адресов** суммарно. После исправлений выполнен
+полный повторный проход, затем адресная проверка уточнённого OECD.
+
+Из **85 подключаемых строк** (81 уникальный основной URL) **56 прошли
+автоматический предпросмотр и сбор**: 30 RSS/Atom и 26 HTML. Ещё **Forbes
+прошёл с явными HTML-селекторами**. Получение проверено для **57 из 85**
+строк (около 67%); 28 требуют другого адреса/адаптера или доступности сайта.
+Это техническая совместимость, не гарантия свежих новостей или полного
+текста каждой статьи. Из остальных 13 справочных/API-строк 12 доступны
+для чтения, сайт Yann LeCun недоступен. API-адаптеры не добавлялись.
+
+Для всех 106 URL получены 57 предпросмотров с пробными пакетами (168 карточек
+с возможными повторами), 12 доступных справочных страниц и 37 безопасных
+отказов, включая старые URL и вспомогательные страницы. Forbes дополнительно
+проверен пакетом из трёх карточек. У Karpathy и Bengio часть текстов
+недоступна; в результатах сохранены карточки с предупреждением. Личные
+сайты могут содержать архивные публикации: рабочее окно 30 дней тогда
+корректно даёт нулевой сбор. Страница EU AI Act отдаёт также общие новости
+Еврокомиссии, CNews — общую бизнес-ленту; тематику надо проверить перед включением.
+
+Исправления проверены на живых примерах: gzip/deflate (включая DeepMind
+robots.txt), карточки Anthropic/Meta/Qwen/Worklab, заголовки Google AI/Cohere/
+РБК, датированные списки, отсечение меню и продуктовых ссылок. Ошибка
+alternate-ленты больше не отменяет корректный HTML-предпросмотр.
+У NVIDIA, CNews и DeepSeek заменены устаревшие/неподходящие адреса, у OECD
+выбрана лента AI Wonk вместо обзора; прежние ссылки оставлены дополнительными.
+
+Оставшиеся ограничения:
+
+- HTTP 403/429, недоступный robots.txt и остановка передачи не обходятся.
+  У METR отдельный запрос с лимитом 60 секунд получил 14298 из 28534 байт,
+  хотя последующий общий прогон прошёл: внешняя доступность нестабильна,
+  увеличение штатного таймаута не гарантирует успех.
+- The Zvi отдаёт ленту больше 2 МиБ; лимит не повышался.
+- Часть страниц не содержит подходящих карточек в статическом HTML или
+  ведёт к авторизации (TechCommunity). Нужны иной URL либо селекторы/адаптер.
+- Для HBR найден [актуальный раздел](https://hbr.org/topic/subject/ai-and-machine-learning?sort=newest),
+  для Yudkowsky — [профиль](https://www.lesswrong.com/users/eliezer-yudkowsky),
+  для Т-Банка — [AI Research](https://ai.tbank.ru/research/).
+  Их безопасная загрузка в дополнительной проверке не прошла;
+  эти адреса не помечены готовыми к подключению.
+
+<details>
+<summary>Все 98 строк: результат по основному адресу подключения</summary>
+
+| Раздел | Источник | Результат |
+|---|---|---|
+| Лаборатории | [OpenAI News](https://openai.com/news/) | HTTP 403 |
+| Лаборатории | [Anthropic News](https://www.anthropic.com/news) | HTML: 3 карточки |
+| Лаборатории | [Google DeepMind](https://deepmind.google/discover/blog/) | HTML: 3 карточки |
+| Лаборатории | [Google AI Blog](https://blog.google/technology/ai/) | HTML: 3 карточки |
+| Лаборатории | [Hugging Face Blog](https://huggingface.co/blog/feed.xml) | RSS: 3 карточки |
+| Лаборатории | [Meta AI](https://ai.meta.com/blog/) | HTML: 3 карточки |
+| Лаборатории | [Microsoft Research](https://www.microsoft.com/en-us/research/blog/) | RSS: 3 карточки |
+| Лаборатории | [Microsoft Azure AI](https://techcommunity.microsoft.com/category/azure-ai-services/blog/azure-ai-services-blog) | Автоматически карточки не найдены |
+| Лаборатории | [Mistral AI News](https://mistral.ai/news) | RSS: 3 карточки |
+| Лаборатории | [NVIDIA AI Blog](https://blogs.nvidia.com/blog/tag/artificial-intelligence/) | RSS: 3 карточки |
+| Лаборатории | [Cohere Blog](https://cohere.com/blog) | HTML: 3 карточки |
+| Лаборатории | [AWS Machine Learning](https://aws.amazon.com/blogs/machine-learning/) | RSS: 3 карточки |
+| Лаборатории | [IBM Research AI](https://research.ibm.com/artificial-intelligence) | RSS: 3 карточки |
+| Лаборатории | [Qwen](https://qwenlm.github.io/) | HTML: 3 карточки |
+| Лаборатории | [DeepSeek](https://www.deepseek.com/en/news/) | HTML: 3 карточки |
+| Разработка | [Simon Willison](https://simonwillison.net/atom/entries/) | RSS: 3 карточки |
+| Разработка | [Lilian Weng](https://lilianweng.github.io/) | RSS: 3 карточки |
+| Разработка | [Chip Huyen](https://huyenchip.com/blog/) | RSS: 3 карточки |
+| Разработка | [Hugging Face Papers](https://huggingface.co/papers) | HTML: 3 карточки |
+| Разработка | [LangChain Blog](https://blog.langchain.com/) | Автоматически карточки не найдены |
+| Разработка | [LlamaIndex Blog](https://www.llamaindex.ai/blog) | Сеть/таймаут |
+| Разработка | [arXiv cs.AI](https://rss.arxiv.org/rss/cs.AI) | RSS: 3 карточки |
+| Разработка | [arXiv cs.CL](https://rss.arxiv.org/rss/cs.CL) | RSS: 3 карточки |
+| Разработка | [arXiv cs.LG](https://rss.arxiv.org/rss/cs.LG) | RSS: 3 карточки |
+| Разработка | [Full Stack Deep Learning](https://fullstackdeeplearning.com/) | Автоматически карточки не найдены |
+| Разработка | [Eugene Yan](https://eugeneyan.com/) | HTML: 3 карточки |
+| Разработка | [Hamel Husain](https://hamel.dev/) | RSS: 3 карточки |
+| Разработка | [Sebastian Raschka](https://sebastianraschka.com/blog/) | RSS: 3 карточки |
+| Разработка | [Martin Fowler](https://martinfowler.com/feed.atom) | Сеть/таймаут |
+| Разработка | [GitHub Blog: AI](https://github.blog/ai-and-ml/) | HTML: 3 карточки |
+| Бизнес | [Ethan Mollick / One Useful Thing](https://www.oneusefulthing.org/) | RSS: 3 карточки |
+| Бизнес | [MIT Sloan Management Review / AI](https://sloanreview.mit.edu/tag/artificial-intelligence/) | Сеть/таймаут |
+| Бизнес | [Harvard Business Review / AI](https://hbr.org/topic/subject/artificial-intelligence) | HTTP 404 |
+| Бизнес | [McKinsey / AI](https://www.mckinsey.com/capabilities/quantumblack/our-insights) | Сеть/таймаут |
+| Бизнес | [Stanford HAI AI Index 2026](https://hai.stanford.edu/ai-index/2026-ai-index-report) | Сеть/таймаут |
+| Бизнес | [Microsoft WorkLab](https://www.microsoft.com/en-us/worklab/) | HTML: 3 карточки |
+| Бизнес | [Gartner AI](https://www.gartner.com/en/topics/artificial-intelligence) | HTTP 403 |
+| Бизнес | [Deloitte Insights / AI](https://www.deloitte.com/global/en/insights/topics/ai.html) | robots.txt: HTTP 403 |
+| Бизнес | [IBM Think / AI](https://www.ibm.com/think/topics/artificial-intelligence) | Автоматически карточки не найдены |
+| Бизнес | [VentureBeat AI](https://venturebeat.com/ai/) | HTTP 429 |
+| Бизнес | [The Batch (DeepLearning.AI)](https://www.deeplearning.ai/the-batch/) | HTML: 3 карточки |
+| Общество | [AI Now Institute](https://ainowinstitute.org/) | HTML: 3 карточки |
+| Общество | [Ada Lovelace Institute](https://www.adalovelaceinstitute.org/) | HTML: 3 карточки |
+| Общество | [OECD AI Policy Observatory](https://oecd.ai/en/wonk) | HTML: 3 карточки |
+| Общество | [EU AI Act official](https://digital-strategy.ec.europa.eu/en/policies/regulatory-framework-ai) | HTML: 3 карточки |
+| Общество | [NIST AI Risk Management Framework](https://www.nist.gov/itl/ai-risk-management-framework) | HTTP 503 |
+| Общество | [Stanford HAI Policy](https://hai.stanford.edu/policy) | Сеть/таймаут |
+| Общество | [Center for AI Safety](https://www.safe.ai/) | HTML: 2 карточки |
+| Общество | [METR](https://metr.org/) | HTML: 3 карточки |
+| Общество | [AI Incident Database](https://incidentdatabase.ai/) | Сеть/таймаут |
+| Общество | [Partnership on AI](https://partnershiponai.org/) | Автоматически карточки не найдены |
+| Общество | [Future of Life Institute](https://futureoflife.org/) | HTML: 3 карточки |
+| Общество | [The Gradient](https://thegradient.pub/) | RSS: 3 карточки |
+| Общество | [Noema Magazine](https://www.noemamag.com/) | RSS: 3 карточки |
+| Общество | [Aeon](https://aeon.co/) | Сеть/таймаут |
+| Общество | [MIT Technology Review — AI](https://www.technologyreview.com/topic/artificial-intelligence/) | Автоматически карточки не найдены |
+| Общество | [Nature Machine Intelligence](https://www.nature.com/natmachintell/) | Автоматически карточки не найдены |
+| Авторы | [Simon Willison](https://simonwillison.net/atom/entries/) | RSS: 3 карточки |
+| Авторы | [Ethan Mollick](https://www.oneusefulthing.org/) | RSS: 3 карточки |
+| Авторы | [Andrej Karpathy](https://karpathy.ai/) | HTML: 3 карточки; текст частично |
+| Авторы | [Andrew Ng](https://www.andrewng.org/) | Автоматически карточки не найдены |
+| Авторы | [Lilian Weng](https://lilianweng.github.io/) | RSS: 3 карточки |
+| Авторы | [Chip Huyen](https://huyenchip.com/) | RSS: 3 карточки |
+| Авторы | [Sebastian Raschka](https://sebastianraschka.com/) | RSS: 3 карточки |
+| Авторы | [Gary Marcus](https://garymarcus.substack.com/) | RSS: 3 карточки |
+| Авторы | [Yoshua Bengio](https://yoshuabengio.org/) | HTML: 3 карточки; текст частично |
+| Авторы | [Geoffrey Hinton](https://www.cs.toronto.edu/~hinton/) | Доступен для чтения |
+| Авторы | [Yann LeCun](https://yann.lecun.com/) | Сеть/таймаут |
+| Авторы | [Richard Sutton](http://incompleteideas.net/) | Доступен для чтения |
+| Авторы | [Eliezer Yudkowsky](https://www.lesswrong.com/users/elizeryudkowsky) | HTTP 404 |
+| Авторы | [Scott Alexander](https://www.astralcodexten.com/) | RSS: 3 карточки |
+| Авторы | [Zvi Mowshowitz](https://thezvi.substack.com/) | Лента больше 2 МиБ |
+| Авторы | [Jürgen Schmidhuber](https://people.idsia.ch/~juergen/) | Доступен для чтения |
+| Русскоязычные | [Хабр — Искусственный интеллект](https://habr.com/ru/hubs/artificial_intelligence/) | RSS: 3 карточки |
+| Русскоязычные | [Хабр — Машинное обучение](https://habr.com/ru/hubs/machine_learning/) | RSS: 3 карточки |
+| Русскоязычные | [Tproger](https://tproger.ru/) | RSS: 3 карточки |
+| Русскоязычные | [Код Дурова](https://kod.ru/) | RSS: 3 карточки |
+| Русскоязычные | [N+1](https://nplus1.ru/) | robots.txt: HTTP 403 |
+| Русскоязычные | [ТАСС — Наука](https://nauka.tass.ru/) | robots.txt: HTTP 403 |
+| Русскоязычные | [CNews — Искусственный интеллект](https://ai.cnews.ru/) | RSS: 3 карточки |
+| Русскоязычные | [ComNews](https://www.comnews.ru/) | HTML: 3 карточки |
+| Русскоязычные | [РБК Тренды](https://trends.rbc.ru/) | HTML: 3 карточки |
+| Русскоязычные | [Forbes Russia](https://www.forbes.ru/) | HTML с селекторами: 3 карточки (см. ниже) |
+| Русскоязычные | [ПостНаука](https://postnauka.org/) | HTML: 3 карточки |
+| Русскоязычные | [Горький](https://gorky.media/) | HTML: 3 карточки |
+| Русскоязычные | [Сбер AI](https://developers.sber.ru/) | Автоматически карточки не найдены |
+| Русскоязычные | [Yandex Research](https://research.yandex.com/) | HTML: 3 карточки |
+| Русскоязычные | [Т-Банк AI Research](https://research.tbank.ru/) | DNS: адрес не найден |
+| API и инструменты | [Hacker News Algolia Search](https://hn.algolia.com/api) | Доступен; API-адаптер отсутствует |
+| API и инструменты | [arXiv API](https://info.arxiv.org/help/api/) | Доступен; API-адаптер отсутствует |
+| API и инструменты | [arXiv RSS](https://rss.arxiv.org/rss/cs.AI) | RSS: 3 карточки |
+| API и инструменты | [GitHub REST API](https://docs.github.com/en/rest/releases/releases) | Доступен; API-адаптер отсутствует |
+| API и инструменты | [Crossref REST API](https://api.crossref.org/) | Доступен; API-адаптер отсутствует |
+| API и инструменты | [OpenAlex API](https://docs.openalex.org/) | Доступен; API-адаптер отсутствует |
+| API и инструменты | [Semantic Scholar API](https://api.semanticscholar.org/api-docs/) | Доступен; API-адаптер отсутствует |
+| API и инструменты | [GDELT](https://www.gdeltproject.org/) | Доступен; API-адаптер отсутствует |
+| API и инструменты | [SearXNG (self-hosted)](https://docs.searxng.org/) | Доступен; API-адаптер отсутствует |
+| API и инструменты | [HN RSS](https://hnrss.org/) | Доступен для чтения |
+
+</details>
+
+### Проверенная настройка Forbes
+
+Для `https://www.forbes.ru/` выбрать **HTML**, затем заполнить:
+
+| Поле | Значение |
+|---|---|
+| Элементы списка | `main a[href]:has(p > span):not([href^="/profile/"]):not([href^="/person/"])` |
+| Заголовок | `p > span` |
+| Ссылка | `:scope` |
+
+Остальные селекторы оставить пустыми. Получены пять реальных заголовков и
+три карточки с текстом без предупреждений; профили авторов исключены.
+После изменения вёрстки сайта селекторы нужно перепроверить.
+
+Проверки кода: **461 backend passed**, без failed/skipped, два прежних
+предупреждения testcontainers; **65 профильных frontend passed**, TypeScript
+и ESLint данных каталога passed. Scheduler перезапущен и healthy. Разметка
+интерфейса в этой правке не менялась; доступность проверена существующими
+тестами форм/страниц, ручная приёмка не выполнялась. Аудит не создавал
+активные источники и не вызывал LLM.
+
+Артефакты в `%TEMP%/bks-news-source-audit-20261008/`: `baseline.json`,
+`final.json` (полный повторный проход), `oecd.json` (уточнённый адрес),
+`verified.json` (последний результат каждого из 106 URL),
+`forbes-configured.json` и сетевые диагностики. В `verified.json` есть время
+каждого результата и hash каталога. Логи тестов:
+`%TEMP%/bks-news-source-audit-{backend,frontend}-tests.log`.
 
 ## Подтверждённая приёмка, 08.10.2026
 
@@ -224,6 +475,19 @@ HTML — best effort с настраиваемыми селекторами; с�
   zoom и NVDA/VoiceOver/TalkBack вручную **не проверены**; полного
   подтверждения WCAG одни автоматические проверки не дают.
 - `pip-audit`: известных уязвимостей в зависимостях backend не найдено.
+
+После переноса полного каталога: **62 профильных теста passed** (данные,
+фильтры, формы и защита страниц), TypeScript, ESLint и production build —
+passed. В Chrome с изолированной тестовой сессией и read-only API-заглушкой
+прошли **10 проверок**, включая переход из списка источников, все 98 строк,
+поиск, фильтры, клавиатуру, раскрытие адресов и заполнение формы с обязательной
+проверкой перед сохранением. Светлая/тёмная темы на 1280/320 px:
+**4 axe-прогона, 0 нарушений**, горизонтального переполнения нет; скриншоты
+просмотрены. Этот проход проверял интерфейс; отдельный живой аудит всех
+адресов описан выше. Массовое подключение источников не выполнялось. Артефакты:
+`%TEMP%/bks-news-catalogue-{tests,lint,build}.log`,
+`%TEMP%/bks-news-20261008/news-browser-catalogue.json` и
+`news-catalogue-*.png` в том же каталоге.
 
 Локальные артефакты: `%TEMP%/bks-news-20261008/` (браузер, скриншоты,
 HTTPS), `%TEMP%/bks-news-backend-final.log`,

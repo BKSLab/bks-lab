@@ -2,7 +2,7 @@
 
 import { useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
-import { sourceSuggestions } from "@/lib/news-api/catalogue";
+import { sourceCatalogue, sourceGroups, type SourceCatalogueEntry } from "@/lib/news-api/catalogue";
 import { externalNewsUrl } from "@/lib/news-api/params";
 import type { NewsDiscovery, NewsJobAccepted, NewsSource, NewsTaxonomy } from "@/lib/news-api/types";
 import { NewsFeedback, useNewsMutation } from "./NewsFeedback";
@@ -23,14 +23,16 @@ function TaxonomyCheckboxes({ label, name, values, selected, disabled }: { label
   </div> : <p className="admin-muted">Пока нет. Добавьте в разделе «Темы и рубрики».</p>}</fieldset>;
 }
 
-export function NewsSourceForm({ source, topics, categories }: { source?: NewsSource; topics: NewsTaxonomy[]; categories: NewsTaxonomy[] }) {
+export function NewsSourceForm({ source, topics, categories, catalogueEntry }: { source?: NewsSource; topics: NewsTaxonomy[]; categories: NewsTaxonomy[]; catalogueEntry?: SourceCatalogueEntry }) {
   const router = useRouter();
   const mutation = useNewsMutation();
-  const [name, setName] = useState(source?.name ?? "");
-  const [url, setUrl] = useState(source?.url ?? "");
-  const [kind, setKind] = useState<"auto" | "rss" | "html">(source?.kind ?? "auto");
+  const suggestion = !source && catalogueEntry && ["rss", "auto"].includes(catalogueEntry.mode) ? catalogueEntry : undefined;
+  const [selectedCatalogueId, setSelectedCatalogueId] = useState(suggestion?.id ?? "");
+  const [name, setName] = useState(source?.name ?? suggestion?.name ?? "");
+  const [url, setUrl] = useState(source?.url ?? suggestion?.feedUrl ?? suggestion?.url ?? "");
+  const [kind, setKind] = useState<"auto" | "rss" | "html">(source?.kind ?? (suggestion?.mode === "rss" ? "rss" : "auto"));
   const [selectors, setSelectors] = useState(source?.config ?? {});
-  const [vendor, setVendor] = useState(source?.vendor_affiliated ?? false);
+  const [vendor, setVendor] = useState(source?.vendor_affiliated ?? suggestion?.vendor ?? false);
   const [checking, setChecking] = useState(false);
   const [jobId, setJobId] = useState<number | null>(null);
   const [preview, setPreview] = useState<NewsDiscovery | null>(null);
@@ -65,11 +67,12 @@ export function NewsSourceForm({ source, topics, categories }: { source?: NewsSo
   }
 
   return <form className="news-form" onSubmit={save} aria-busy={mutation.pending || checking}>
-    {!source && <div className="admin-field"><label htmlFor="news-source-suggestion">Подставить адрес из каталога</label><select id="news-source-suggestion" defaultValue="" disabled={checking || mutation.pending} onChange={event => {
-      const suggestion = sourceSuggestions[Number(event.target.value)];
-      if (!suggestion || !event.target.value) return;
-      setName(suggestion.name); setUrl(suggestion.url); setKind(suggestion.kind); setSelectors({}); setVendor(suggestion.vendor); setVerified(null); setPreview(null);
-    }}><option value="">Свой источник</option>{sourceSuggestions.map((suggestion, index) => <option value={index} key={suggestion.url}>{suggestion.name}</option>)}</select><p className="admin-muted">Адреса из исследовательского каталога. Каждый источник нужно проверить перед сохранением.</p></div>}
+    {!source && <div className="admin-field"><label htmlFor="news-source-suggestion">Подставить адрес из каталога</label><select id="news-source-suggestion" value={selectedCatalogueId} disabled={checking || mutation.pending} onChange={event => {
+      setSelectedCatalogueId(event.target.value);
+      const selected = sourceCatalogue.find(entry => entry.id === event.target.value && ["rss", "auto"].includes(entry.mode));
+      if (!selected) return;
+      setName(selected.name); setUrl(selected.feedUrl ?? selected.url); setKind(selected.mode === "rss" ? "rss" : "auto"); setSelectors({}); setVendor(selected.vendor); setVerified(null); setPreview(null); setJobId(null); mutation.setMessage(""); mutation.setError("");
+    }}><option value="">Свой источник</option>{sourceGroups.map(group => <optgroup key={group.id} label={group.title}>{sourceCatalogue.filter(entry => entry.group === group.id && ["rss", "auto"].includes(entry.mode)).map(entry => <option value={entry.id} key={entry.id}>{entry.name}{entry.priority ? ` · ${entry.priority}` : ""}</option>)}</optgroup>)}</select><p className="admin-muted">Здесь доступны RSS и страницы публикаций из полного каталога. Каждый источник нужно проверить перед сохранением.</p></div>}
     <div className="news-fields-two">
       <div className="admin-field"><label htmlFor="news-source-name">Название (обязательно)</label><input id="news-source-name" value={name} onChange={event => setName(event.target.value)} maxLength={200} required disabled={mutation.pending} /></div>
       <div className="admin-field"><label htmlFor="news-source-kind">Способ получения</label><select id="news-source-kind" value={kind} onChange={event => setKind(event.target.value as typeof kind)} disabled={checking || mutation.pending}><option value="auto">Определить автоматически</option><option value="rss">RSS / Atom</option><option value="html">HTML</option></select></div>

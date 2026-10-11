@@ -3,6 +3,8 @@
 from src.db.models.base import Base
 from src.db.models.admin_sessions import AdminSession
 from src.db.models.content_items import ContentItem
+from src.db.models.content_revisions import ContentRevision
+from src.db.models.media_files import MediaFile
 from src.db.models.page_views import PageView
 from src.db.models.subscribers import Subscriber
 from src.db.models.news_catalog import NewsCategory, NewsTopic
@@ -13,7 +15,7 @@ from src.db.models.news_jobs import NewsJob, NewsSourceRun
 from src.db.models.news_settings import NewsSetting
 
 __all__ = [
-    "Base", "AdminSession", "ContentItem", "PageView", "Subscriber", "NewsCategory",
+    "Base", "AdminSession", "ContentItem", "ContentRevision", "MediaFile", "PageView", "Subscriber", "NewsCategory",
     "NewsTopic", "NewsSource", "NewsItem", "NewsAnalysis", "NewsEditorialDecision",
     "NewsJob", "NewsSourceRun", "NewsSetting",
 ]

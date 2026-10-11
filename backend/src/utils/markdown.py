@@ -7,6 +7,7 @@ it would be stripped by sanitization anyway.
 import hashlib
 import math
 import re
+from collections.abc import Iterator
 from typing import Any
 
 import yaml
@@ -24,6 +25,50 @@ _markdown = (
 )
 
 _SLUG_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+
+# Inline ad marker (docs/content_editor.md §7): a standalone "::ad" line in an
+# article body becomes a placeholder the frontend replaces with an AdSlot.
+AD_MARKER = "::ad"
+AD_PLACEHOLDER = '<div data-ad-slot="article-inline"></div>'
+AD_MARKER_MAX = 2
+
+_AD_MARKER_LINE = re.compile(r"^[ \t]*::ad[ \t]*$")
+_FENCE_LINE = re.compile(r"^[ \t]*(```|~~~)")
+
+
+def _content_lines(body: str) -> Iterator[str]:
+    """Yield lines outside fenced code blocks (markers in code are literal)."""
+    in_fence = False
+    for line in body.splitlines():
+        if _FENCE_LINE.match(line):
+            in_fence = not in_fence
+            continue
+        if not in_fence:
+            yield line
+
+
+def count_ad_markers(body: str) -> int:
+    """Count standalone ::ad marker lines, ignoring fenced code blocks."""
+    return sum(1 for line in _content_lines(body) if _AD_MARKER_LINE.match(line))
+
+
+def ad_marker_error(content_type: str, body: str) -> str | None:
+    """Return a validation error message for misplaced ad markers, or None.
+
+    Rules: articles only, at most AD_MARKER_MAX markers, and a marker may not
+    be the first or the last block of the body.
+    """
+    count = count_ad_markers(body)
+    if count == 0:
+        return None
+    if content_type != "article":
+        return "Ad markers are allowed in articles only"
+    if count > AD_MARKER_MAX:
+        return f"At most {AD_MARKER_MAX} ad markers per article"
+    blocks = [block.strip() for block in re.split(r"\n[ \t]*\n", body) if block.strip()]
+    if blocks and (blocks[0] == AD_MARKER or blocks[-1] == AD_MARKER):
+        return "An ad marker may not be the first or last block"
+    return None
 
 
 class MarkdownParseError(Exception):
@@ -65,8 +110,13 @@ def parse_frontmatter(raw: str) -> tuple[dict[str, Any], str]:
 
 
 def render_markdown(body: str) -> str:
-    """Render Markdown body to HTML (GFM: tables, strikethrough, footnotes)."""
-    return _markdown.render(body)
+    """Render Markdown body to HTML (GFM: tables, strikethrough, footnotes).
+
+    Standalone ::ad lines become the inline ad placeholder; the frontend
+    splits stored HTML on it and mounts an AdSlot between content parts.
+    """
+    html = _markdown.render(body)
+    return html.replace(f"<p>{AD_MARKER}</p>", AD_PLACEHOLDER)
 
 
 def _collect_inline_text(children: list, break_char: str) -> str:

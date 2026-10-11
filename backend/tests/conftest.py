@@ -1,7 +1,8 @@
 """Shared fixtures: required PostgreSQL testcontainer,
-Markdown content builders and an API client with overridden dependencies."""
+Markdown content builders and an API client backed by the test database."""
 
 import os
+import tempfile
 from collections.abc import AsyncGenerator, Iterator
 from datetime import datetime, timezone
 from pathlib import Path
@@ -18,6 +19,8 @@ os.environ["ADMIN_ALLOWED_ORIGINS"] = "[]"
 os.environ["SMTP_HOST"] = ""
 os.environ["SMTP_SENDER"] = ""
 os.environ["SMTP_RECIPIENT"] = ""
+# Uploads land in a scratch directory instead of the repo during tests.
+os.environ["MEDIA_DIR"] = tempfile.mkdtemp(prefix="bks-lab-test-uploads-")
 
 import pytest
 import pytest_asyncio
@@ -27,20 +30,14 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from testcontainers.postgres import PostgresContainer
 
 from main import app
+from scripts.import_content_to_db import import_content
 from src.core.limiter import limiter
 from src.db.models import (
-    AdminSession, Base, ContentItem, PageView, Subscriber,
+    AdminSession, Base, ContentItem, ContentRevision, MediaFile, PageView, Subscriber,
     NewsSource, NewsJob, NewsCategory, NewsTopic, NewsSetting,
 )
 from src.dependencies.db_session import get_db_session
-from src.dependencies.repositories import (
-    get_articles_repository,
-    get_notes_repository,
-    get_projects_repository,
-)
 from src.dependencies.services import get_stats_service, get_utc_now
-from src.repositories.markdown_content import MarkdownContentRepository
-from src.schemas.frontmatter import ArticleFrontmatter, NoteFrontmatter, ProjectFrontmatter
 from src.services.stats import StatsService
 
 # PostgreSQL is mandatory: SQLite cannot prove the production SQL semantics.
@@ -103,7 +100,9 @@ async def _clean_tables(
         await session.execute(delete(NewsTopic))
         await session.execute(delete(NewsSetting))
         await session.execute(delete(PageView))
+        await session.execute(delete(ContentRevision))
         await session.execute(delete(ContentItem))
+        await session.execute(delete(MediaFile))
         await session.execute(delete(AdminSession))
         await session.execute(delete(Subscriber))
         await session.commit()
@@ -237,37 +236,18 @@ def content_dirs(tmp_path: Path) -> dict[str, Path]:
     return {"article": articles, "note": notes, "project": projects}
 
 
-def make_markdown_repository(
-    content_type: str,
-    directory: Path,
-    session_factory: async_sessionmaker[AsyncSession],
-) -> MarkdownContentRepository:
-    """Build a Markdown repository with immediate TTL expiry (test-friendly)."""
-    model = {
-        "article": ArticleFrontmatter,
-        "note": NoteFrontmatter,
-        "project": ProjectFrontmatter,
-    }[content_type]
-    return MarkdownContentRepository(
-        content_dir=directory,
-        content_type=content_type,
-        frontmatter_model=model,
-        session_factory=session_factory,
-        ttl_seconds=0.0,
-        words_per_minute=200,
-    )
-
-
 @pytest_asyncio.fixture
 async def client(
     content_dirs: dict[str, Path],
     session_factory: async_sessionmaker[AsyncSession],
     client_ip: str,
 ) -> AsyncGenerator[AsyncClient, None]:
-    """API client with content repositories pointing at the tmp fixture tree."""
-    articles_repo = make_markdown_repository("article", content_dirs["article"], session_factory)
-    notes_repo = make_markdown_repository("note", content_dirs["note"], session_factory)
-    projects_repo = make_markdown_repository("project", content_dirs["project"], session_factory)
+    """API client with the fixture content tree imported into the test DB.
+
+    The deliberately invalid file in the fixture tree is skipped by the
+    importer, mirroring production behaviour.
+    """
+    await import_content(session_factory, content_dirs["article"].parent, words_per_minute=200)
 
     def stats_service_factory() -> StatsService:
         return StatsService(
@@ -281,9 +261,6 @@ async def client(
         async with session_factory() as session:
             yield session
 
-    app.dependency_overrides[get_articles_repository] = lambda: articles_repo
-    app.dependency_overrides[get_notes_repository] = lambda: notes_repo
-    app.dependency_overrides[get_projects_repository] = lambda: projects_repo
     app.dependency_overrides[get_stats_service] = stats_service_factory
     app.dependency_overrides[get_db_session] = test_db_session
     app.dependency_overrides[get_utc_now] = lambda: lambda: _FIXED_NOW
