@@ -34,7 +34,7 @@ from scripts.import_content_to_db import import_content
 from src.core.limiter import limiter
 from src.db.models import (
     AdminSession, Base, ContentItem, ContentRevision, MediaFile, PageView, Subscriber,
-    NewsSource, NewsJob, NewsCategory, NewsTopic, NewsSetting,
+    NewsSource, NewsSourceCatalogueEntry, NewsJob, NewsCategory, NewsTopic, NewsSetting,
 )
 from src.dependencies.db_session import get_db_session
 from src.dependencies.services import get_stats_service, get_utc_now
@@ -95,6 +95,7 @@ async def _clean_tables(
     yield
     async with session_factory() as session:
         await session.execute(delete(NewsSource))
+        await session.execute(delete(NewsSourceCatalogueEntry))
         await session.execute(delete(NewsJob))
         await session.execute(delete(NewsCategory))
         await session.execute(delete(NewsTopic))

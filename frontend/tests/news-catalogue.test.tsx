@@ -2,11 +2,25 @@ import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import { NewsSourceCatalogue } from "@/components/admin/news/NewsSourceCatalogue";
+import { sourceCatalogue } from "./news-catalogue-fixtures";
 import { newsSource } from "./news-fixtures";
 
 describe("complete source catalogue", () => {
+  it("shows only supplied persisted entries and has no static fallback", () => {
+    render(<NewsSourceCatalogue sources={[]} catalogue={[{ ...sourceCatalogue[0], name: "Запись из БД" }]} />);
+    expect(screen.getAllByRole("heading", { level: 2 })).toHaveLength(1);
+    expect(screen.getByRole("heading", { name: /^Запись из БД/ })).toBeTruthy();
+    expect(screen.getByRole("status").textContent).toContain("1 из 1");
+  });
+
+  it("renders an empty persisted catalogue without adding bundled entries", () => {
+    render(<NewsSourceCatalogue sources={[]} catalogue={[]} />);
+    expect(screen.queryAllByRole("heading", { level: 2 })).toHaveLength(0);
+    expect(screen.getByRole("status").textContent).toContain("0 из 0");
+  });
+
   it("displays every research row and preserves alternate feed addresses", () => {
-    render(<NewsSourceCatalogue sources={[]} />);
+    render(<NewsSourceCatalogue catalogue={sourceCatalogue} sources={[]} />);
     expect(screen.getAllByRole("heading", { level: 2 })).toHaveLength(98);
     expect(screen.getByRole("status").textContent).toContain("98 из 98");
     expect(screen.getByRole("heading", { name: /^HN RSS/ })).toBeTruthy();
@@ -16,7 +30,7 @@ describe("complete source catalogue", () => {
   });
 
   it("combines search, group, usage and priority filters and resets them", () => {
-    render(<NewsSourceCatalogue sources={[]} />);
+    render(<NewsSourceCatalogue catalogue={sourceCatalogue} sources={[]} />);
     fireEvent.change(screen.getByLabelText("Раздел каталога"), { target: { value: "russian" } });
     expect(screen.getByRole("status").textContent).toContain("15 из 98");
     fireEvent.change(screen.getByLabelText("Приоритет каталога"), { target: { value: "B" } });
@@ -32,7 +46,7 @@ describe("complete source catalogue", () => {
   });
 
   it("searches alternate URLs and preserves tools without offering unsupported collection", () => {
-    render(<NewsSourceCatalogue sources={[]} />);
+    render(<NewsSourceCatalogue catalogue={sourceCatalogue} sources={[]} />);
     fireEvent.change(screen.getByLabelText("Поиск по названию, адресу и описанию"), { target: { value: "search_by_date" } });
     expect(screen.getByRole("heading", { name: /^Hacker News Algolia Search/ })).toBeTruthy();
     expect(screen.queryByRole("link", { name: /Проверить и подключить/ })).toBeNull();
@@ -43,7 +57,7 @@ describe("complete source catalogue", () => {
   });
 
   it.each([true, false])("recognizes an existing source and its active=%s state across duplicate authors", active => {
-    render(<NewsSourceCatalogue sources={[{ ...newsSource, url: "https://simonwillison.net/atom/entries", active }]} />);
+    render(<NewsSourceCatalogue catalogue={sourceCatalogue} sources={[{ ...newsSource, url: "https://simonwillison.net/atom/entries", active }]} />);
     fireEvent.change(screen.getByLabelText("Поиск по названию, адресу и описанию"), { target: { value: "Simon Willison" } });
     expect(screen.getAllByRole("link", { name: "Настроить источник: Simon Willison" })).toHaveLength(2);
     expect(screen.getAllByText(active ? "Подключён" : "На паузе")).toHaveLength(2);

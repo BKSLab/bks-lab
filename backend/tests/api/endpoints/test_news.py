@@ -8,15 +8,17 @@ from fastapi.routing import APIRoute
 from sqlalchemy import func, select
 
 from main import app
-from src.db.models import NewsJob, NewsSource
+from src.db.models import NewsJob, NewsSource, NewsSourceCatalogueEntry
 from src.dependencies.admin import check_admin_origin, require_admin
 from src.repositories.news_items import NewsItemRepository
 from src.repositories.news_jobs import NewsJobRepository
 from tests.api.endpoints.test_admin import ORIGIN, admin_config as admin_config, login
 from tests.news_helpers import add_source, collected
+from scripts.seed_news import load_source_catalogue, seed_news
 
 ROUTES = [
     ("GET", "/sources"),
+    ("GET", "/sources/catalogue"),
     ("POST", "/sources"),
     ("POST", "/sources/discover"),
     ("PATCH", "/sources/1"),
@@ -36,6 +38,27 @@ ROUTES = [
     ("GET", "/settings"),
     ("PATCH", "/settings"),
 ]
+
+
+async def test_catalogue_reads_persisted_suggestions_without_connecting_sources(
+    client, session_factory, db_session,
+):
+    await seed_news(session_factory, load_source_catalogue())
+    row = await db_session.get(NewsSourceCatalogueEntry, "labs-openai")
+    row.data = {**row.data, "description": "Updated catalogue notes"}
+    await db_session.commit()
+    await login(client)
+    response = await client.get("/api/admin/news/sources/catalogue")
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+    entries = response.json()
+    assert len(entries) == 98
+    assert entries[0]["description"] == "Updated catalogue notes"
+    assert any(entry["priority"] is None for entry in entries)
+    feed = next(entry for entry in entries if entry["id"] == "labs-huggingface")
+    assert feed["feedUrl"] == "https://huggingface.co/blog/feed.xml"
+    assert await db_session.scalar(select(func.count()).select_from(NewsSource)) == 0
+    assert await db_session.scalar(select(func.count()).select_from(NewsJob)) == 0
 
 
 def test_news_routes_use_authentication_and_origin_dependencies_and_keep_layers():

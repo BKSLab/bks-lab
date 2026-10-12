@@ -24,6 +24,7 @@ import NewsSettingsPage from "@/app/(admin)/admin/news/settings/page";
 import NewsRunsPage from "@/app/(admin)/admin/news/runs/page";
 import NewsJobPage from "@/app/(admin)/admin/news/jobs/[id]/page";
 import { adminFetch, requireAdmin } from "@/lib/admin-api";
+import { sourceCatalogue } from "./news-catalogue-fixtures";
 import { newsAnalysis, newsCategory, newsItem, newsJob, newsSettings, newsSource, newsTopic } from "./news-fixtures";
 
 const paged = { items: [], total: 0, page: 1, page_size: 20, pages: 0 };
@@ -34,6 +35,7 @@ beforeEach(() => {
   vi.mocked(requireAdmin).mockReset().mockResolvedValue({ username: "owner" });
   vi.mocked(adminFetch).mockImplementation(async path => {
     if (path === "/news/sources") return [newsSource];
+    if (path === "/news/sources/catalogue") return sourceCatalogue;
     if (path === "/news/topics") return [newsTopic];
     if (path === "/news/categories") return [newsCategory];
     if (path === "/news/items/4") return newsItem;
@@ -44,6 +46,15 @@ beforeEach(() => {
 });
 
 describe("protected editorial routes", () => {
+  it("loads catalogue suggestions from the protected API", async () => {
+    vi.mocked(adminFetch).mockImplementation(async path => path === "/news/sources/catalogue"
+      ? [{ ...sourceCatalogue[0], name: "Каталог из БД" }] : []);
+    render(<AdminLayout>{await NewsCataloguePage()}</AdminLayout>);
+    expect(screen.getByRole("heading", { name: /^Каталог из БД/ })).toBeTruthy();
+    expect(screen.getByRole("status").textContent).toContain("1 из 1");
+    expect(adminFetch).toHaveBeenCalledWith("/news/sources/catalogue");
+  });
+
   it.each([
     ["entry", () => NewsPage()],
     ["items", () => NewsItemsPage(emptyParams())],
@@ -99,7 +110,7 @@ describe("protected editorial routes", () => {
   });
 
   it("does not offer a manual collection before any source is connected", async () => {
-    vi.mocked(adminFetch).mockResolvedValue([]);
+    vi.mocked(adminFetch).mockImplementation(async path => path === "/news/sources/catalogue" ? sourceCatalogue : []);
     render(<AdminLayout>{await NewsSourcesPage()}</AdminLayout>);
     expect(screen.queryByRole("button", { name: "Проверить сейчас" })).toBeNull();
     expect(screen.getByText(/Подключённых источников пока нет/)).toBeTruthy();

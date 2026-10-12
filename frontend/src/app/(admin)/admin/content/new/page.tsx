@@ -10,7 +10,7 @@ import type { ContentType } from "@/lib/admin-api/types";
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "Новый материал" };
 
-export const newMaterialLabels: Record<ContentType, string> = {
+const newMaterialLabels: Record<ContentType, string> = {
   article: "Новая статья",
   note: "Новая заметка",
   project: "Новый проект",

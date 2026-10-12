@@ -11,7 +11,7 @@ import { NewsJobLauncher } from "@/components/admin/news/NewsJobLauncher";
 import { NewsJobProgress } from "@/components/admin/news/NewsJobProgress";
 import { NewsSettingsForm } from "@/components/admin/news/NewsSettingsForm";
 import { NewsTaxonomyManager } from "@/components/admin/news/NewsTaxonomyManager";
-import { sourceCatalogue } from "@/lib/news-api/catalogue";
+import { sourceCatalogue } from "./news-catalogue-fixtures";
 import { newsCategory, newsJob, newsSettings, newsSource, newsTopic } from "./news-fixtures";
 
 beforeEach(() => { fetchMock.mockReset(); Object.values(router).forEach(fn => fn.mockReset()); vi.stubGlobal("fetch", fetchMock); });
@@ -25,7 +25,7 @@ function fillSource() {
 
 describe("source discovery and saving", () => {
   it("has labeled inputs and blocks saving an untested source with a focused explanation", async () => {
-    const { container } = render(<NewsSourceForm topics={[newsTopic]} categories={[newsCategory]} />);
+    const { container } = render(<NewsSourceForm catalogue={sourceCatalogue} topics={[newsTopic]} categories={[newsCategory]} />);
     fillSource();
     fireEvent.click(screen.getByRole("button", { name: "Сохранить источник" }));
     const error = await screen.findByRole("alert");
@@ -37,7 +37,7 @@ describe("source discovery and saving", () => {
 
   it("queues discovery, previews the resolved feed, and saves its job proof with editor settings", async () => {
     fetchMock.mockResolvedValueOnce(json({ job_id: 9, status: "queued" }, 202)).mockResolvedValueOnce(json(newsJob)).mockResolvedValueOnce(json(newsSource));
-    render(<NewsSourceForm topics={[newsTopic]} categories={[newsCategory]} />);
+    render(<NewsSourceForm catalogue={sourceCatalogue} topics={[newsTopic]} categories={[newsCategory]} />);
     fillSource();
     fireEvent.click(screen.getByLabelText("AI Engineering"));
     fireEvent.click(screen.getByRole("button", { name: "Проверить источник" }));
@@ -57,7 +57,7 @@ describe("source discovery and saving", () => {
 
   it("invalidates proof after editing the discovered URL", async () => {
     fetchMock.mockResolvedValueOnce(json({ job_id: 9, status: "queued" }, 202)).mockResolvedValueOnce(json(newsJob));
-    render(<NewsSourceForm topics={[]} categories={[]} />);
+    render(<NewsSourceForm catalogue={sourceCatalogue} topics={[]} categories={[]} />);
     fillSource();
     fireEvent.click(screen.getByRole("button", { name: "Проверить источник" }));
     await screen.findByRole("link", { name: "Новая публикация (в новой вкладке)" });
@@ -69,7 +69,7 @@ describe("source discovery and saving", () => {
 
   it("allows editing metadata of an already verified source without another discovery", async () => {
     fetchMock.mockResolvedValue(json(newsSource));
-    render(<NewsSourceForm source={newsSource} topics={[newsTopic]} categories={[newsCategory]} />);
+    render(<NewsSourceForm catalogue={sourceCatalogue} source={newsSource} topics={[newsTopic]} categories={[newsCategory]} />);
     fireEvent.change(screen.getByLabelText("Название (обязательно)"), { target: { value: "Новое название" } });
     fireEvent.click(screen.getByRole("button", { name: "Сохранить источник" }));
     await waitFor(() => expect(router.push).toHaveBeenCalledWith("/admin/news/sources"));
@@ -81,7 +81,7 @@ describe("source discovery and saving", () => {
   it("requires rechecking HTML after selectors change", async () => {
     const htmlJob = { ...newsJob, result: { ...newsJob.result, kind: "html", url: "https://example.org/" } };
     fetchMock.mockResolvedValueOnce(json({ job_id: 9, status: "queued" }, 202)).mockResolvedValueOnce(json(htmlJob));
-    render(<NewsSourceForm topics={[]} categories={[]} />);
+    render(<NewsSourceForm catalogue={sourceCatalogue} topics={[]} categories={[]} />);
     fillSource();
     fireEvent.change(screen.getByLabelText("Способ получения"), { target: { value: "html" } });
     fireEvent.change(screen.getByLabelText("Блок публикации"), { target: { value: " article " } });
@@ -96,7 +96,7 @@ describe("source discovery and saving", () => {
   });
 
   it("only prefills a catalogue suggestion, never auto-enables or saves it", () => {
-    render(<NewsSourceForm topics={[]} categories={[]} />);
+    render(<NewsSourceForm catalogue={sourceCatalogue} topics={[]} categories={[]} />);
     fireEvent.change(screen.getByLabelText("Подставить адрес из каталога"), { target: { value: "eng-simon" } });
     expect((screen.getByLabelText("Название (обязательно)") as HTMLInputElement).value).toBe("Simon Willison");
     expect((screen.getByLabelText("URL источника (обязательно)") as HTMLInputElement).value).toBe("https://simonwillison.net/atom/entries/");
@@ -105,7 +105,7 @@ describe("source discovery and saving", () => {
   });
 
   it("prefills a catalogue deep link but still requires successful discovery", async () => {
-    render(<NewsSourceForm topics={[]} categories={[]} catalogueEntry={sourceCatalogue.find(entry => entry.id === "ru-tbank")} />);
+    render(<NewsSourceForm catalogue={sourceCatalogue} topics={[]} categories={[]} catalogueEntry={sourceCatalogue.find(entry => entry.id === "ru-tbank")} />);
     expect((screen.getByLabelText("Название (обязательно)") as HTMLInputElement).value).toBe("Т-Банк AI Research");
     expect((screen.getByLabelText("URL источника (обязательно)") as HTMLInputElement).value).toBe("https://research.tbank.ru/");
     expect((screen.getByLabelText("Источник связан с поставщиком продукта") as HTMLInputElement).checked).toBe(true);
@@ -117,7 +117,7 @@ describe("source discovery and saving", () => {
 
   it("clears the previous discovery when another catalogue entry is selected", async () => {
     fetchMock.mockResolvedValueOnce(json({ job_id: 9, status: "queued" }, 202)).mockResolvedValueOnce(json(newsJob));
-    render(<NewsSourceForm topics={[]} categories={[]} />);
+    render(<NewsSourceForm catalogue={sourceCatalogue} topics={[]} categories={[]} />);
     fillSource();
     fireEvent.click(screen.getByRole("button", { name: "Проверить источник" }));
     await screen.findByRole("link", { name: "Новая публикация (в новой вкладке)" });

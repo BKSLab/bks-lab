@@ -9,7 +9,7 @@ from fastapi.routing import APIRoute
 from pydantic import AwareDatetime
 
 from src.dependencies.admin import AdminDep, check_admin_origin, require_admin
-from src.dependencies.news import NewsAdminServiceDep
+from src.dependencies.news import NewsAdminServiceDep, SourceCatalogueServiceDep
 from src.schemas.news import (
     CatalogCreate,
     CatalogPatch,
@@ -33,6 +33,7 @@ from src.schemas.news import (
     SourceRow,
 )
 from src.schemas.pagination import Paged
+from src.schemas.news_source_catalogue import SourceCatalogueEntry
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +94,19 @@ FilterID = Annotated[
 async def sources(service: NewsAdminServiceDep) -> list[SourceRow]:
     """Read sources without fetching their external URLs."""
     return await service.list_sources()
+
+
+@router.get(
+    "/sources/catalogue",
+    response_model=list[SourceCatalogueEntry],
+    summary="Read source catalogue suggestions",
+    description="Read persisted research suggestions without connecting sources or fetching URLs.",
+    operation_id="newsSourceCatalogue",
+    response_description="All source catalogue entries in research order.",
+)
+async def source_catalogue(service: SourceCatalogueServiceDep) -> list[SourceCatalogueEntry]:
+    """Read the startup-seeded source catalogue for the authenticated editor."""
+    return await service.list()
 
 
 @router.post(

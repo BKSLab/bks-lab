@@ -146,7 +146,17 @@ docker compose logs --tail 50 news-analyzer-scheduler
 материалы; их сохранение начинается при ручном или плановом обходе.
 Изменение URL, способа получения или CSS-селекторов требует новой проверки.
 Выбор другого пункта каталога сбрасывает прежний предпросмотр и результат
-проверки. Каталог не создаёт записей в БД и не включает сбор автоматически.
+проверки. Подсказки каталога хранятся в `news_source_catalogue`; админка
+читает их через защищённый `GET /api/admin/news/sources/catalogue`.
+Каталог не создаёт подключённых источников и не включает сбор автоматически.
+
+После миграций backend автоматически запускает `python -m scripts.seed_news`.
+Он загружает подсказки из `backend/src/data/news_source_catalogue.json`,
+а также начальные темы и рубрики. Пустая БД получает все начальные записи;
+повторный запуск добавляет только отсутствующие ID подсказок и имена
+тем/рубрик. Существующие записи и настройки подключённых источников
+сохраняются. Если новых записей нет, seed не выполняет вставок или обновлений.
+Подключение источников по-прежнему требует успешного discovery.
 
 По умолчанию обходы запускаются в `08:00`, `14:00`, `20:00`,
 `Europe/Samara`. Расписание и редакционные настройки применяются без
@@ -252,7 +262,7 @@ scheduler. Он проверяет все уникальные основные 
 Из корня проекта (PowerShell, запущен dev Compose):
 
 ```powershell
-Get-Content -Raw frontend/src/lib/news-api/catalogue.ts | docker compose exec -T backend python -m scripts.audit_news_catalogue --catalogue - --output /tmp/news-catalogue-audit.json --collect
+docker compose exec -T backend python -m scripts.audit_news_catalogue --catalogue src/data/news_source_catalogue.json --output /tmp/news-catalogue-audit.json --collect
 docker compose cp backend:/tmp/news-catalogue-audit.json "$env:TEMP/news-catalogue-audit.json"
 ```
 

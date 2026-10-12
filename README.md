@@ -49,7 +49,7 @@
 
 ```text
 backend/    FastAPI-приложение: main.py, src/ (api, services, repositories,
-            db, dependencies, schemas, core, ...), content/ (seed Markdown),
+            db, dependencies, schemas, core, ...), content/ (архив Markdown),
             scripts/, tests/, Dockerfile
 frontend/   Next.js: публичная часть, админка, дизайн-токены, public/ с ассетами
 docs/       архитектура, контракт API, формат контента, план реализации
@@ -135,18 +135,22 @@ PostgreSQL, история версий сохраняется). Редакци�
 
 ## News Analyzer
 
-После запуска backend миграции применяются автоматически, затем стартует
-`news-analyzer-scheduler`. Он использует тот же образ и PostgreSQL, работает
-без открытой админки и не публикует HTTP-порт. Для начального заполнения тем
-и рубрик:
+После запуска backend автоматически применяются миграции и выполняется
+`scripts.seed_news`, затем стартует `news-analyzer-scheduler`. Он использует
+тот же образ и PostgreSQL, работает без открытой админки и не публикует
+HTTP-порт. Seed заполняет каталог подсказок источников, темы и рубрики:
+в пустой БД создаёт начальные записи, при повторном запуске добавляет
+только отсутствующие. Существующие записи и настройки источников сохраняются;
+если новых записей нет, seed ничего не записывает. Повторный запуск вручную:
 
 ```bash
 docker compose exec backend python -m scripts.seed_news
 ```
 
-При локальном backend выполните `python -m scripts.seed_news` из каталога
-`backend`. Команда добавляет недостающие записи справочников; источники
-не создаёт и сбор для них не включает.
+При локальном backend без Docker выполните `python -m scripts.seed_news`
+из каталога `backend` после миграций. Начальные подсказки хранятся в
+`backend/src/data/news_source_catalogue.json`; админка читает каталог из
+PostgreSQL. Seed не создаёт подключённые источники и не включает сбор.
 
 При работе без backend-контейнеров запустите из `backend` также отдельный
 процесс `python -m src.background_tasks.news_scheduler` с той же env-
@@ -276,8 +280,10 @@ NVDA, VoiceOver/TalkBack, нативный browser zoom и полный ручн
 через админку (`/admin/content`): тело — Markdown, при сохранении пишется
 версия, обложки и изображения загружаются в `uploads/`. Формат полей —
 `docs/content_format.md`, устройство редактора — `docs/content_editor.md`.
-Файлы `backend/content/` — исторический архив и разовый seed: импорт в БД
-выполняется `docker compose exec backend python -m scripts.import_content_to_db`.
+Все новые публикации создаются только в редакторе админки. Файлы
+`backend/content/` — исторический архив, приложение их не читает.
+Production запускается с пустой БД: локальные публикации и uploads не
+переносятся, Markdown-файлы не импортируются.
 
 Источники новостей, результаты анализа и решения редактора хранятся
 в PostgreSQL отдельно от опубликованного контента. Редакционный центр
@@ -285,7 +291,7 @@ NVDA, VoiceOver/TalkBack, нативный browser zoom и полный ручн
 
 После сохранения материала backend сам вызывает revalidate-webhook
 фронтенда: Next.js обновляет кэш без пересборки; при недоступности webhook
-кэш истечёт по ISR (5 минут). Первоначальный запуск и импорт — в
+кэш истечёт по ISR (5 минут). Первоначальный запуск — в
 [инструкции развёртывания](docs/deployment.md).
 
 ## Дизайн и работа с репозиторием

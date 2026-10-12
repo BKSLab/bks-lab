@@ -52,13 +52,18 @@ class NewsCatalogRepository(NewsRepository):
             await self.db_session.commit()
             return row
 
-    async def seed(self, kind: CatalogKind, entries: list[dict]) -> None:
+    async def seed(self, kind: CatalogKind, entries: list[dict]) -> int:
         """Insert missing defaults without overwriting editorial customizations."""
         async with self.operation():
-            for entry in entries:
-                await self.db_session.execute(
-                    insert(self.model(kind))
-                    .values(**entry)
-                    .on_conflict_do_nothing(index_elements=["name"])
-                )
+            model = self.model(kind)
+            existing = set(await self.db_session.scalars(select(model.name)))
+            missing = [entry for entry in entries if entry["name"] not in existing]
+            if not missing:
+                return 0
+            inserted = list((await self.db_session.scalars(
+                insert(model).values(missing)
+                .on_conflict_do_nothing(index_elements=["name"])
+                .returning(model.id)
+            )).all())
             await self.db_session.commit()
+            return len(inserted)

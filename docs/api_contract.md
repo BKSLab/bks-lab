@@ -461,13 +461,15 @@ created_at}`. 413 — превышен лимит размера. 422 — не �
 найденными публикациями и редакционными решениями; News Analyzer не создаёт
 публикации на сайте — публикации создаёт редактор контента (`/content`,
 см. выше). Cookie, `require_admin`, Origin-проверка и `no-store` применяются
-ко всему разделу. ID — положительные целые числа; даты ответов — ISO 8601
+ко всему разделу. ID — положительные целые числа (у подсказок каталога —
+стабильные строковые ID); даты ответов — ISO 8601
 UTC. Лишние поля в запросах запрещены. В PATCH передаются изменяемые поля;
 `null` для них не допускается.
 
 | Метод и путь после `/api/admin/news` | Результат |
 |---|---|
 | GET `/sources` | 200, массив `SourceRow` |
+| GET `/sources/catalogue` | 200, массив `SourceCatalogueEntry` из БД |
 | POST `/sources/discover` | 202, `QueuedJob` |
 | POST `/sources` | 201, `SourceRow` |
 | PATCH `/sources/{id}` | 200, `SourceRow` |
@@ -486,6 +488,14 @@ UTC. Лишние поля в запросах запрещены. В PATCH пе
 `Paged<T>` содержит `items`, `total`, `page`, `page_size`, `pages`.
 Для `/items` и `/runs` по умолчанию `page=1`, `page_size=20`, максимум 50.
 Источники и справочники возвращают массивы без пагинации.
+
+`SourceCatalogueEntry`: `id` (строка), `group`, `name`, `url`, `feedUrl`
+(строка или null), `extraUrls` (массив строк), `priority` (`A|B|C|null`),
+`connection`, `description`, `mode` (`rss|auto|read|api`), `vendor` (boolean).
+Список возвращается в сохранённом порядке; подсказки находятся в
+`news_source_catalogue` отдельно от подключённых `news_sources`.
+`scripts.seed_news` добавляет недостающие подсказки после миграций при
+старте backend. Этот GET не выполняет discovery и не включает сбор.
 
 #### Источники и предпросмотр
 

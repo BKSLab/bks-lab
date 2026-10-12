@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useState } from "react";
-import { sourceCatalogue, sourceGroups, type SourceCatalogueMode } from "@/lib/news-api/catalogue";
+import { sourceGroups, type SourceCatalogueEntry, type SourceCatalogueMode } from "@/lib/news-api/catalogue";
 import type { NewsSource } from "@/lib/news-api/types";
 
 const modeLabels: Record<SourceCatalogueMode, string> = {
@@ -16,7 +16,7 @@ function comparableUrl(value: string): string {
   } catch { return value; }
 }
 
-export function NewsSourceCatalogue({ sources }: { sources: NewsSource[] }) {
+export function NewsSourceCatalogue({ sources, catalogue: sourceCatalogue }: { sources: NewsSource[]; catalogue: SourceCatalogueEntry[] }) {
   const [query, setQuery] = useState("");
   const [group, setGroup] = useState("");
   const [priority, setPriority] = useState("");

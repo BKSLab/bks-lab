@@ -104,9 +104,9 @@ backend/
     core/           # settings (pydantic-settings), логирование
     exceptions/     # доменные исключения со status_code/detail
     utils/          # markdown-парсинг (frontmatter, рендеринг в HTML)
-  content/          # dev-seed: Markdown + frontmatter для scripts/import_content_to_db.py;
+  content/          # historical Markdown archive and local test fixtures;
                     # приложение эти файлы не читает, в prod-образ не попадают
-  scripts/          # new_article.py, new_project.py, new_note.py, import_content_to_db.py
+  scripts/          # seed_news.py, audit_news_catalogue.py; historical content helpers
   tests/
   requirements.txt
   Dockerfile
@@ -148,8 +148,10 @@ backend/
 **Источник истины — PostgreSQL** (таблица `content_items`); Markdown
 остаётся форматом разметки тела. Материалы создаются и правятся через
 редактор в админке (`/admin/content`, API — `docs/api_contract.md`).
-Файлы `backend/content/` — только dev-seed для разового импорта
-(`python -m scripts.import_content_to_db`), приложением не читаются.
+Первый production-запуск выполняется с пустой БД; локальная БД и uploads
+не переносятся. Все новые публикации создаются только через редактор.
+Файлы `backend/content/` остаются историческим архивом, приложением не
+читаются и при развёртывании не импортируются.
 
 Процесс публикации:
 
@@ -326,8 +328,16 @@ sqladmin — ради дашбордов, графиков и расширяем
   объёма, таймауты и retries, ручной повторный анализ, очистка старых
   текстов и истории. В интерфейс и ошибки не попадают ключ и тела ответов
   провайдера.
-- **Начальные справочники:** `python -m scripts.seed_news` добавляет темы
-  и рубрики, не создавая источники. Адреса каталога служат подсказками;
+- **Начальные справочники:** после миграций entrypoint backend запускает
+  `python -m scripts.seed_news`. Он добавляет недостающие темы, рубрики и
+  подсказки каталога (`news_source_catalogue`) из
+  `backend/src/data/news_source_catalogue.json`. Для каталога ключ — ID,
+  для тем/рубрик — имя; существующие записи не обновляются. При отсутствии
+  новых записей seed ничего не пишет, параллельные старты защищены
+  уникальными ключами и `ON CONFLICT DO NOTHING`.
+  Админка читает каталог через `GET /api/admin/news/sources/catalogue`.
+  Подключённые источники остаются в отдельной таблице `news_sources`.
+  Адреса каталога служат подсказками;
   сохранение и включение каждого источника требуют проверки редактором.
 
 Celery, Redis/RabbitMQ, локальные модели, платные поисковые API, генерация

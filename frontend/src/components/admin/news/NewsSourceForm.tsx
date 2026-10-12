@@ -2,7 +2,7 @@
 
 import { useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
-import { sourceCatalogue, sourceGroups, type SourceCatalogueEntry } from "@/lib/news-api/catalogue";
+import { sourceGroups, type SourceCatalogueEntry } from "@/lib/news-api/catalogue";
 import { externalNewsUrl } from "@/lib/news-api/params";
 import type { NewsDiscovery, NewsJobAccepted, NewsSource, NewsTaxonomy } from "@/lib/news-api/types";
 import { NewsFeedback, useNewsMutation } from "./NewsFeedback";
@@ -23,7 +23,7 @@ function TaxonomyCheckboxes({ label, name, values, selected, disabled }: { label
   </div> : <p className="admin-muted">Пока нет. Добавьте в разделе «Темы и рубрики».</p>}</fieldset>;
 }
 
-export function NewsSourceForm({ source, topics, categories, catalogueEntry }: { source?: NewsSource; topics: NewsTaxonomy[]; categories: NewsTaxonomy[]; catalogueEntry?: SourceCatalogueEntry }) {
+export function NewsSourceForm({ source, topics, categories, catalogueEntry, catalogue: sourceCatalogue = [] }: { source?: NewsSource; topics: NewsTaxonomy[]; categories: NewsTaxonomy[]; catalogueEntry?: SourceCatalogueEntry; catalogue?: SourceCatalogueEntry[] }) {
   const router = useRouter();
   const mutation = useNewsMutation();
   const suggestion = !source && catalogueEntry && ["rss", "auto"].includes(catalogueEntry.mode) ? catalogueEntry : undefined;

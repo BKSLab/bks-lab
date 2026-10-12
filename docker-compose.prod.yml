@@ -188,7 +188,7 @@ services:
     logging: *logging
 
   certbot:
-    image: certbot/certbot:v5.0.0
+    image: certbot/certbot:v5.4.0
     profiles: [tools]
     volumes:
       - certificates:/etc/letsencrypt

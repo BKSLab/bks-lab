@@ -8,13 +8,21 @@ Production-конфигурация находится в `docker-compose.prod.y
 uploads и сертификаты хранятся в именованных volumes. Не выполнять
 `down -v` на рабочем сервере.
 
-Публичный запуск отложен владельцем. Эта инструкция описывает последующий
-деплой; пока конфигурация проверена только в отдельном локальном HTTPS-окружении.
+Первый серверный стенд разворачивается по IP, домен подключается после
+его проверки. Конфигурация пока проверена только в отдельном локальном
+HTTPS-окружении; серверная приёмка ещё не проведена.
+
+Первый production-запуск выполняется с пустой БД: локальная БД, публикации
+и uploads не переносятся. Все статьи, заметки и проекты создаются только
+через редактор `/admin/content`. Markdown-файлы из `backend/content/`
+не импортируются; они остаются историческим архивом.
 
 ## Перед первым запуском
 
-Нужен Linux-сервер с Docker Engine и Compose v2, Git и Python 3. DNS-запись
-`bks-lab.ru` должна указывать на него; порты 80/443 должны быть доступны.
+Нужен Linux-сервер с Docker Engine и Compose v2, Git и Python 3. Первый
+стенд проверяется на `91.218.114.82`, публичный DNS `bks-lab.ru` пока не
+меняется. Порты 80/443 должны быть доступны; домен подключается после
+проверки стенда.
 Доступ к серверу и почтовый аккаунт предоставляет владелец.
 
 ```bash
@@ -24,7 +32,7 @@ chmod 600 .env.production
 
 Скрипт не перезаписывает существующий файл и не выводит секреты. Он создаёт
 разные случайные пароли БД/админки и секреты статистики/публикации. В закрытом
-редакторе заполнить `.env.production`: `SITE_HOST` (только hostname),
+редакторе заполнить `.env.production`: `SITE_HOST` (hostname или IPv4 без схемы/порта),
 `CONTACT_EMAIL`, `SMTP_HOST`, порт, логин/пароль, `SMTP_SENDER`,
 `SMTP_RECIPIENT`. Логин админки — `ADMIN_USERNAME`; пароль — `ADMIN_PASSWORD`.
 Файл не хранить в git и не прикладывать к отчётам.
@@ -45,55 +53,103 @@ chmod 600 .env.production
 docker compose --env-file .env.production -f docker-compose.prod.yml config --quiet
 docker compose --env-file .env.production -f docker-compose.prod.yml build
 docker compose --env-file .env.production -f docker-compose.prod.yml up -d --wait db backend news-analyzer-scheduler frontend
-docker compose --env-file .env.production -f docker-compose.prod.yml exec -T backend python -m scripts.seed_news
-docker compose --env-file .env.production -f docker-compose.prod.yml exec -T backend python -m scripts.import_content_to_db
 ```
 
 Frontend собирается без живого API. Пустые списки допустимы только при
 сборке; после запуска ошибки API обрабатываются как ошибки. Backend при
-старте выполняет Alembic migrations; перед обновлением существующего
-сервера создать резервную копию.
+старте выполняет Alembic migrations, затем `python -m scripts.seed_news`;
+перед обновлением существующего сервера создать резервную копию.
 
 News Analyzer требует отдельного scheduler из того же backend-образа и
 одинаковых `NEWS_*` у API и обработчика. Без параметров LLM собранные
-материалы ожидают анализа. Seed добавляет только темы/рубрики; источники
-подключаются через предпросмотр в админке. Импорт контента переносит
-Markdown-файлы из `backend/content/` в PostgreSQL (идемпотентен по
-`(type, slug)`, пишет первую ревизию). Импорт — разовый: повторный запуск
-после правок в админке перезапишет материалы содержимым файлов, поэтому
-после импорта контент ведётся только в редакторе. Конфигурация — в
-`.env.production.example`, подробности — в [news_analyzer.md](news_analyzer.md).
+материалы ожидают анализа. Seed заполняет каталог подсказок
+(`news_source_catalogue`) из `backend/src/data/news_source_catalogue.json`,
+а также темы и рубрики. В пустую БД добавляются все начальные записи;
+при каждом следующем старте — только отсутствующие ID каталога и имена
+тем/рубрик. Если новых записей нет, вставок и обновлений не выполняется;
+в лог выводятся нулевые счётчики. Существующие записи, их порядок и
+настройки подключённых источников не перезаписываются.
+
+Каталог читается админкой из БД через защищённый
+`GET /api/admin/news/sources/catalogue`. Seed не подключает источники и
+не включает сбор: это делается через успешный предпросмотр в админке.
+Таблицы публикаций остаются пустыми до создания материалов в редакторе.
+Для отдельного повторного запуска seed можно выполнить:
+
+```bash
+docker compose --env-file .env.production -f docker-compose.prod.yml exec -T backend python -m scripts.seed_news
+```
+
+Конфигурация — в `.env.production.example`, подробности — в
+[news_analyzer.md](news_analyzer.md).
 
 ## HTTPS
+
+Для первого стенда установить `SITE_HOST=91.218.114.82` в
+`.env.production` до сборки frontend. Админка использует HTTPS и Secure
+cookie на обоих этапах; разрешённый Origin формируется из `SITE_HOST`.
+
+### Первый стенд по IP
 
 Сначала запустить единственный nginx в режиме выдачи ACME challenge.
 В этом режиме приложение по HTTP не отдаётся.
 
 ```bash
 NGINX_TEMPLATE_DIR=./infra/nginx/http docker compose --env-file .env.production -f docker-compose.prod.yml up -d nginx
-docker compose --env-file .env.production -f docker-compose.prod.yml run --rm certbot certonly --webroot --webroot-path /var/www/certbot --domain bks-lab.ru --email YOUR_CERTIFICATE_EMAIL --agree-tos --no-eff-email
+docker compose --env-file .env.production -f docker-compose.prod.yml run --rm certbot certonly --webroot --webroot-path /var/www/certbot --preferred-profile shortlived --ip-address 91.218.114.82 --cert-name 91.218.114.82 --email YOUR_CERTIFICATE_EMAIL --agree-tos --no-eff-email
 docker compose --env-file .env.production -f docker-compose.prod.yml up -d --force-recreate nginx
 docker compose --env-file .env.production -f docker-compose.prod.yml exec -T nginx nginx -t
 ```
 
-В команде certbot заменить домен на `SITE_HOST` и email на настоящий адрес
-владельца сертификата. Выпуск сертификата — внешний шаг после настройки DNS.
-При ошибке certbot оставить bootstrap-режим, исправить DNS/доступность
-challenge и повторить только выпуск. Не переключать nginx на HTTPS до
-появления сертификата.
+Заменить `YOUR_CERTIFICATE_EMAIL` адресом владельца сертификата.
+Для IP нужен Certbot 5.4+ (образ закреплён в Compose), сертификат действует
+около шести дней. DNS-запись домена для этого не требуется.
+[Официальная инструкция Let's Encrypt](https://letsencrypt.org/2026/03/11/shorter-certs-certbot.html).
+
+Проверять `https://91.218.114.82`, включая вход в админку, редактор и каталог.
+При ошибке certbot оставить bootstrap-режим, исправить доступность
+challenge и повторить выпуск. Не переключать nginx на HTTPS до появления
+сертификата.
 
 Добавить в cron на сервере запуск `bash /absolute/path/bks-lab/scripts/renew-certificates.sh`
 дважды в сутки. Скрипт проверяет срок сертификата через certbot, проверяет
 nginx и перечитывает сертификат. Отслеживать ошибки cron. Отдельный Docker
 socket в контейнеры не передаётся.
 
+### Подключение домена после проверки IP
+
+Настроить A-запись `bks-lab.ru` на `91.218.114.82`; после её обновления
+выпустить доменный сертификат. Работающий nginx обслуживает ACME challenge
+на порту 80:
+
+```bash
+docker compose --env-file .env.production -f docker-compose.prod.yml run --rm certbot certonly --webroot --webroot-path /var/www/certbot --domain bks-lab.ru --email YOUR_CERTIFICATE_EMAIL --agree-tos --no-eff-email
+```
+
+Затем установить `SITE_HOST=bks-lab.ru` в `.env.production`, пересобрать
+frontend и пересоздать backend, чтобы применился новый разрешённый Origin:
+
+```bash
+docker compose --env-file .env.production -f docker-compose.prod.yml up -d --build --wait backend news-analyzer-scheduler frontend
+docker compose --env-file .env.production -f docker-compose.prod.yml up -d --force-recreate nginx
+docker compose --env-file .env.production -f docker-compose.prod.yml exec -T nginx nginx -t
+```
+
+При ошибке выпуска доменного сертификата сохранить рабочий IP-стенд и
+его `SITE_HOST`, исправить DNS/доступность challenge и повторить выпуск.
+Не менять конфигурацию на домен до появления его сертификата.
+
 ## Проверка запуска
 
 - `docker compose ... ps`: db/backend/news-analyzer-scheduler/frontend/nginx healthy.
-- `https://bks-lab.ru/api/health`: 200; HTTP перенаправляет на HTTPS.
-- Главная, статья, проект, `/sitemap.xml` используют боевой домен и контент.
+- `https://91.218.114.82/api/health` на первом стенде, затем
+  `https://bks-lab.ru/api/health`: 200; HTTP перенаправляет на HTTPS.
+- Главная, пустые списки блога/заметок/проектов и `/sitemap.xml` открываются
+  без ошибок и используют боевой домен. После создания материала в админке
+  его страница и sitemap обновляются без пересборки frontend.
 - `/admin` без входа открывает `/admin/login`; `/api/admin/overview` — 401
-  с `Cache-Control: no-store`. После входа работают статистика и материалы;
+  с `Cache-Control: no-store`. После входа работают статистика и редактор:
+  создание материала, загрузка изображения, сохранение и предпросмотр;
   после выхода прежняя сессия недействительна.
 - Cookie `admin_session`: HttpOnly, Secure, SameSite=Strict, Path=/.
   Path нужен для серверной проверки страниц `/admin`; JS токен не читает.
@@ -128,7 +184,7 @@ Authorization, не попадает в URL); страницы и sitemap обн
 ```bash
 bash scripts/backup-database.sh
 git pull --ff-only
-docker compose --env-file .env.production -f docker-compose.prod.yml up -d --build --wait db backend frontend
+docker compose --env-file .env.production -f docker-compose.prod.yml up -d --build --wait db backend news-analyzer-scheduler frontend
 docker compose --env-file .env.production -f docker-compose.prod.yml up -d --force-recreate nginx
 ```
 

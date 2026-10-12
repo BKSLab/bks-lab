@@ -14,7 +14,9 @@ from src.repositories.news_jobs import NewsJobRepository
 from src.repositories.news_runs import NewsRunRepository
 from src.repositories.news_settings import NewsSettingsRepository
 from src.repositories.news_sources import NewsSourceRepository
+from src.repositories.news_source_catalogue import NewsSourceCatalogueRepository
 from src.services.news_admin import NewsAdminService
+from src.services.news_source_catalogue import NewsSourceCatalogueService
 
 
 def get_news_sources(session: DbSessionDep) -> NewsSourceRepository:
@@ -84,3 +86,13 @@ def get_news_admin_service(
 
 
 NewsAdminServiceDep = Annotated[NewsAdminService, Depends(get_news_admin_service)]
+
+
+def get_source_catalogue_service(session: DbSessionDep) -> NewsSourceCatalogueService:
+    """Construct the read-only research catalogue service."""
+    return NewsSourceCatalogueService(NewsSourceCatalogueRepository(session))
+
+
+SourceCatalogueServiceDep = Annotated[
+    NewsSourceCatalogueService, Depends(get_source_catalogue_service)
+]

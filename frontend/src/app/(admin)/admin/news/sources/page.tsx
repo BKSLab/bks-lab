@@ -6,7 +6,7 @@ import { NewsSourceToggle } from "@/components/admin/news/NewsSourceToggle";
 import { adminFetch, requireAdmin } from "@/lib/admin-api";
 import { adminDate } from "@/lib/admin-api/params";
 import { externalNewsUrl } from "@/lib/news-api/params";
-import { sourceCatalogue } from "@/lib/news-api/catalogue";
+import type { SourceCatalogueEntry } from "@/lib/news-api/catalogue";
 import type { NewsSource } from "@/lib/news-api/types";
 
 export const dynamic = "force-dynamic";
@@ -14,7 +14,10 @@ export const metadata: Metadata = { title: "Источники редакцио�
 
 export default async function NewsSourcesPage() {
   const user = await requireAdmin();
-  const sources = await adminFetch<NewsSource[]>("/news/sources");
+  const [sources, sourceCatalogue] = await Promise.all([
+    adminFetch<NewsSource[]>("/news/sources"),
+    adminFetch<SourceCatalogueEntry[]>("/news/sources/catalogue"),
+  ]);
   return <NewsShell username={user.username} current="sources" title="Источники публикаций" description="RSS, Atom и открытые HTML-страницы. Каждый источник проходит проверку перед добавлением.">
     <div className="news-actions"><Link className="admin-button admin-button-primary" prefetch={false} href="/admin/news/sources/catalogue">Каталог источников ({sourceCatalogue.length})</Link><Link className="admin-button" prefetch={false} href="/admin/news/sources/new">Добавить источник</Link></div>
     {sources.length > 0 && <section className="admin-section news-stack" aria-labelledby="news-sources-check">

@@ -3,7 +3,8 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
-import { sourceCatalogue, sourceGroups, type SourceCatalogueEntry, type SourceCatalogueGroup } from "@/lib/news-api/catalogue";
+import { sourceGroups, type SourceCatalogueEntry, type SourceCatalogueGroup } from "@/lib/news-api/catalogue";
+import { sourceCatalogue } from "./news-catalogue-fixtures";
 
 const sectionGroups: Record<number, SourceCatalogueGroup> = {
   1: "labs", 2: "engineering", 3: "business", 4: "society", 5: "authors", 6: "russian", 7: "tools",
