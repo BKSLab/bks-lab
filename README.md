@@ -34,9 +34,10 @@
 - **Frontend:** Next.js 16 (App Router) + React 19 + TypeScript, Tailwind CSS 4.
 - **News Analyzer:** RSS/Atom и HTML, внешняя LLM, очередь в PostgreSQL,
   APScheduler в отдельном процессе `news-analyzer-scheduler`.
-- **Инфраструктура:** Docker + Compose (dev: `db`, `backend`,
-  `news-analyzer-scheduler`; prod дополнительно frontend, nginx с TLS,
-  certbot). Новых открытых портов для News Analyzer нет.
+- **Инфраструктура:** Docker + `docker-compose.prod.yml`: `db`, `backend`,
+  `news-analyzer-scheduler`, frontend, nginx с TLS и certbot. Локальная
+  разработка — отдельный контейнер PostgreSQL и процессы Python/Next.js.
+  Новых открытых портов для News Analyzer нет.
 
 Документация: `docs/architecture.md`, `docs/api_contract.md`,
 `docs/content_format.md`, `docs/content_editor.md`,
@@ -55,7 +56,6 @@ frontend/   Next.js: публичная часть, админка, дизайн
 docs/       архитектура, контракт API, формат контента, план реализации
 search_news/  ТЗ News Analyzer и исследовательский каталог источников
 референсы/  исходные визуальные материалы
-docker-compose.yml  dev: db (PostgreSQL 16), backend, news-analyzer-scheduler
 docker-compose.prod.yml  production-окружение с HTTPS
 infra/nginx/  шаблоны nginx для выпуска сертификата и HTTPS
 scripts/     конфигурация prod, backup (БД + uploads), обновление TLS
@@ -72,28 +72,46 @@ scripts/     конфигурация prod, backup (БД + uploads), обнов�
    cp backend/.env.example backend/.env   # затем заполнить значения
    ```
 
-2. Поднять БД, бэкенд и фоновый обработчик в Docker:
+   Для локального backend установить в `backend/.env`
+   `POSTGRES_HOST=127.0.0.1`, `POSTGRES_PORT=5434`. Остальные параметры
+   PostgreSQL должны совпадать у контейнера и приложения.
+
+2. Поднять отдельный контейнер БД из корня проекта:
 
    ```bash
-   docker compose up -d --build db backend news-analyzer-scheduler
-   curl http://localhost:8000/api/health   # {"status":"ok"}
+   docker run -d --name bks-lab-dev-db --env-file backend/.env -p 127.0.0.1:5434:5432 -v bks-lab-dev-db:/var/lib/postgresql/data postgres:16-alpine
    ```
 
-   PostgreSQL доступен с хоста на порту 5434 (для IDE). Код бэкенда
-   смонтирован в контейнер: HTTP-сервер подхватывает правки через `--reload`.
-   После изменения кода фонового обработчика перезапустите
-   `docker compose restart news-analyzer-scheduler`; после изменения env
-   пересоздайте контейнеры.
+   PostgreSQL доступен только локально на порту 5434. Дождаться сообщения
+   о готовности в `docker logs bks-lab-dev-db`. Данные сохраняются в volume;
+   для последующих запусков существующего контейнера использовать
+   `docker start bks-lab-dev-db`.
 
-   Локальный запуск бэкенда без Docker (против Docker-БД):
+3. В Python-окружении проекта запустить backend локально:
 
    ```bash
    cd backend
    pip install -r requirements-dev.txt
-   hypercorn main:app --reload --bind 127.0.0.1:8000   # POSTGRES_HOST=localhost POSTGRES_PORT=5434
+   alembic upgrade head
+   python -m scripts.seed_news
+   hypercorn main:app --reload --bind 127.0.0.1:8000
    ```
 
-3. Запустить фронтенд локально:
+   Проверка: `http://localhost:8000/api/health` возвращает `{"status":"ok"}`.
+   При прямом запуске Hypercorn миграции и seed выполняются вручную;
+   автоматический entrypoint используется только в production-контейнере.
+
+4. В отдельном терминале с тем же Python-окружением запустить scheduler:
+
+   ```bash
+   cd backend
+   python -m src.background_tasks.news_scheduler
+   ```
+
+   После изменения кода scheduler перезапустить этот процесс; после
+   изменения env перезапустить backend и scheduler.
+
+5. В ещё одном терминале запустить фронтенд локально:
 
    ```bash
    cd frontend
@@ -112,9 +130,9 @@ scripts/     конфигурация prod, backup (БД + uploads), обнов�
 
 Для локальной админки задать в `backend/.env` собственные `ADMIN_USERNAME`
 и `ADMIN_PASSWORD`, `ADMIN_ALLOWED_ORIGINS=["http://localhost:3000"]`,
-`ADMIN_COOKIE_SECURE=false`, затем пересоздать backend командой
-`docker compose up -d --force-recreate backend`. Если открываете сайт через
-`127.0.0.1`, добавить этот origin в массив. Войти на `/admin/login`.
+`ADMIN_COOKIE_SECURE=false`, затем перезапустить локальный backend.
+Если открываете сайт через `127.0.0.1`, добавить этот origin в массив.
+Войти на `/admin/login`.
 В production cookie всегда Secure; не переносить локальное значение `false`.
 Админка показывает статистику, материалы и подписчиков; публикации
 создаются и редактируются в редакторе `/admin/content` (хранилище —
@@ -135,16 +153,18 @@ PostgreSQL, история версий сохраняется). Редакци�
 
 ## News Analyzer
 
-После запуска backend автоматически применяются миграции и выполняется
+В production backend автоматически применяет миграции и выполняет
 `scripts.seed_news`, затем стартует `news-analyzer-scheduler`. Он использует
 тот же образ и PostgreSQL, работает без открытой админки и не публикует
-HTTP-порт. Seed заполняет каталог подсказок источников, темы и рубрики:
+HTTP-порт. Локально миграции, seed и scheduler запускаются командами
+из быстрого старта выше. Seed заполняет каталог подсказок источников,
+темы и рубрики:
 в пустой БД создаёт начальные записи, при повторном запуске добавляет
 только отсутствующие. Существующие записи и настройки источников сохраняются;
 если новых записей нет, seed ничего не записывает. Повторный запуск вручную:
 
 ```bash
-docker compose exec backend python -m scripts.seed_news
+docker compose --env-file .env.production -f docker-compose.prod.yml exec backend python -m scripts.seed_news
 ```
 
 При локальном backend без Docker выполните `python -m scripts.seed_news`
@@ -167,10 +187,11 @@ Polza; модель меняется одной строкой:
 NEWS_LLM_MODEL=qwen/qwen3-30b-a3b-instruct-2507
 ```
 
-После изменения env пересоздайте оба процесса:
+После изменения env перезапустите оба локальных процесса. В production
+пересоздайте контейнеры:
 
 ```bash
-docker compose up -d --force-recreate backend news-analyzer-scheduler
+docker compose --env-file .env.production -f docker-compose.prod.yml up -d --force-recreate backend news-analyzer-scheduler
 ```
 
 Ключ не передаётся фронтенду; в настройках видны только наличие конфигурации,

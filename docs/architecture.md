@@ -564,10 +564,10 @@ frontend/
 ## 5. Инфраструктура
 
 ```text
-docker-compose.yml
+docker-compose.prod.yml
   db         # postgres:16-alpine, healthcheck pg_isready, volume pg_data
-  backend    # FastAPI + hypercorn, 1 воркер, entrypoint: alembic upgrade head + старт,
-             # volume: content/ (контент); env из backend/.env
+  backend    # FastAPI + hypercorn, entrypoint: migrations + seed_news + старт,
+             # volume: uploads (изображения); env из .env.production
   news-analyzer-scheduler # тот же backend-образ, APScheduler + очередь, без ports
   frontend   # Next.js standalone, мультистейдж Dockerfile, non-root
   nginx      # 80/443, TLS: /api/* → backend:8000 (включая /api/admin/*),
@@ -580,21 +580,24 @@ docker-compose.yml
 ```yaml
 db:
   image: postgres:16-alpine
-  env_file: ./backend/.env
-  restart: always
+  environment:
+    POSTGRES_USER: ${POSTGRES_USER:-bkslab}
+    POSTGRES_DB: ${POSTGRES_DB:-bkslab}
+    POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+  restart: unless-stopped
   volumes:
     - pg_data:/var/lib/postgresql/data
   healthcheck:
     test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
     interval: 10s
     timeout: 5s
-    retries: 5
+    retries: 10
 ```
 
 - Имя БД задаётся стандартной переменной `POSTGRES_DB` (её и использует
-  healthcheck); приложение читает тот же DSN из `.env`.
-- Порт БД наружу не публикуем в prod (в dev можно `5434:5432` для
-  подключения из IDE, как в референсе).
+  healthcheck); контейнер приложения получает те же параметры из `.env.production`.
+- Порт БД наружу не публикуем в prod. Локальный отдельный контейнер БД
+  доступен только на `127.0.0.1:5434`; команды — в README.
 - Один nginx (упрощение референсной схемы с двумя).
 - nginx проставляет `X-Forwarded-For`/`X-Real-IP`; backend доверяет им
   только от адресов nginx из `APP_TRUSTED_PROXIES`. Разбор заголовков выполняет
@@ -607,10 +610,12 @@ db:
 - **Security-заголовки — только в nginx** (единое место: CSP
   Report-Only→enforce, HSTS, X-Frame-Options); `next.config.ts` их не
   дублирует. Для `/admin` — более строгий CSP (без доменов РСЯ).
-- `backend/content/` — volume: обновление контента = `git pull` на сервере,
-  без пересборки образа. Deploy-скрипт после `git pull` вызывает
-  `/api/revalidate` фронтенда (§4).
-- Dev-режим: `docker compose up db backend news-analyzer-scheduler` + локально `next dev`; в dev
+- Публикации хранятся в PostgreSQL, изображения — в volume `uploads`.
+  Сохранение в админке вызывает `/api/revalidate` фронтенда (§4).
+- Единственная Compose-конфигурация — `docker-compose.prod.yml`;
+  в командах явно задаются `--env-file .env.production -f docker-compose.prod.yml`.
+- Dev-режим: отдельный контейнер PostgreSQL, локальные Hypercorn,
+  `python -m src.background_tasks.news_scheduler` и `next dev`; в dev
   `next.config.ts` содержит rewrites `/api/* → http://localhost:8000`
   (CORS не нужен и локально; Admin API доступен на том же origin).
 

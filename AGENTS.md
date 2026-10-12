@@ -83,8 +83,10 @@ metadata/OG/sitemap самого сайта и собственный редак
   APScheduler, долговечная очередь PostgreSQL, RSS/Atom и HTML, внешняя LLM.
   Источники, анализы и решения находятся в БД отдельно от таблиц контента
   публикаций.
-- **Инфраструктура:** Docker Compose: dev — db/backend/scheduler; prod
-  дополнительно frontend/nginx/certbot. Один nginx для TLS и reverse proxy.
+- **Инфраструктура:** единственная Compose-конфигурация —
+  `docker-compose.prod.yml`: db/backend/scheduler/frontend/nginx/certbot.
+  Локально PostgreSQL запускается отдельным контейнером, backend, scheduler
+  и Next.js — напрямую (команды в README). Один nginx для TLS и reverse proxy.
   Нет Celery, Redis/RabbitMQ и второго nginx; PostgreSQL-очередь News Analyzer
   является согласованной частью проекта. У scheduler нет публичного порта.
 

@@ -1,8 +1,9 @@
 # Развёртывание BKS Lab
 
-Production-конфигурация находится в `docker-compose.prod.yml`. Она отдельна
-от локального `docker-compose.yml`: БД и приложения не публикуют порты,
-снаружи доступны только nginx 80/443. Backend и frontend работают от UID 1001.
+Единственная Compose-конфигурация находится в `docker-compose.prod.yml`.
+Во всех командах Compose явно указывать этот файл и `.env.production`.
+БД и приложения не публикуют порты, снаружи доступны только nginx 80/443.
+Backend и frontend работают от UID 1001.
 Контент хранится в PostgreSQL и редактируется через админку; загруженные
 изображения — в именованном volume `uploads` (раздаёт nginx). PostgreSQL,
 uploads и сертификаты хранятся в именованных volumes. Не выполнять

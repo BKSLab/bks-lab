@@ -113,13 +113,15 @@ LLM; авторизация и Origin для всех API; реальные UI-�
 ## Запуск и повседневная работа
 
 Команды установки, начальные справочники и env приведены в
-[README](../README.md#news-analyzer). Backend применяет миграцию `0004`
-до запуска scheduler. Оба процесса используют один образ и одну БД;
-HTTP-сервер сам очередь не обрабатывает. Для просмотра состояния:
+[README](../README.md#news-analyzer). В production backend применяет все
+миграции и seed до запуска scheduler. Оба процесса используют один образ
+и одну БД; HTTP-сервер сам очередь не обрабатывает. Локально миграции,
+seed и scheduler запускаются вручную по README. Для просмотра состояния
+production-контейнеров:
 
 ```bash
-docker compose ps
-docker compose logs --tail 50 news-analyzer-scheduler
+docker compose --env-file .env.production -f docker-compose.prod.yml ps
+docker compose --env-file .env.production -f docker-compose.prod.yml logs --tail 50 news-analyzer-scheduler
 ```
 
 Во вкладке «Каталог» (`/admin/news/sources/catalogue`) доступны **все 98
@@ -150,7 +152,8 @@ docker compose logs --tail 50 news-analyzer-scheduler
 читает их через защищённый `GET /api/admin/news/sources/catalogue`.
 Каталог не создаёт подключённых источников и не включает сбор автоматически.
 
-После миграций backend автоматически запускает `python -m scripts.seed_news`.
+В production после миграций backend автоматически запускает
+`python -m scripts.seed_news`.
 Он загружает подсказки из `backend/src/data/news_source_catalogue.json`,
 а также начальные темы и рубрики. Пустая БД получает все начальные записи;
 повторный запуск добавляет только отсутствующие ID подсказок и имена
@@ -259,11 +262,11 @@ scheduler. Он проверяет все уникальные основные 
 Справочные сайты и API проверяются на доступность отдельно: HTTP 200 для
 документации не означает наличия готового адаптера API.
 
-Из корня проекта (PowerShell, запущен dev Compose):
+Из корня проекта (PowerShell, Python-окружение backend активировано):
 
 ```powershell
-docker compose exec -T backend python -m scripts.audit_news_catalogue --catalogue src/data/news_source_catalogue.json --output /tmp/news-catalogue-audit.json --collect
-docker compose cp backend:/tmp/news-catalogue-audit.json "$env:TEMP/news-catalogue-audit.json"
+Set-Location backend
+python -m scripts.audit_news_catalogue --catalogue src/data/news_source_catalogue.json --output "$env:TEMP/news-catalogue-audit.json" --collect
 ```
 
 Это чтение внешних ресурсов без записи источников/материалов в БД и без LLM.
