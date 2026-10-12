@@ -563,11 +563,15 @@ frontend/
 
 ## 5. Инфраструктура
 
+`docker-compose.yml` используется для локальной разработки: PostgreSQL,
+backend с `--reload` и отдельный scheduler; Next.js запускается локально.
+`docker-compose.prod.yml` содержит полный production-стек:
+
 ```text
 docker-compose.prod.yml
   db         # postgres:16-alpine, healthcheck pg_isready, volume pg_data
   backend    # FastAPI + hypercorn, entrypoint: migrations + seed_news + старт,
-             # volume: uploads (изображения); env из .env.production
+             # volume: uploads (изображения); env из backend/.env.production
   news-analyzer-scheduler # тот же backend-образ, APScheduler + очередь, без ports
   frontend   # Next.js standalone, мультистейдж Dockerfile, non-root
   nginx      # 80/443, TLS: /api/* → backend:8000 (включая /api/admin/*),
@@ -595,9 +599,9 @@ db:
 ```
 
 - Имя БД задаётся стандартной переменной `POSTGRES_DB` (её и использует
-  healthcheck); контейнер приложения получает те же параметры из `.env.production`.
-- Порт БД наружу не публикуем в prod. Локальный отдельный контейнер БД
-  доступен только на `127.0.0.1:5434`; команды — в README.
+  healthcheck); контейнер приложения получает те же параметры из `backend/.env.production`.
+- Порт БД наружу не публикуем в prod. Dev Compose публикует PostgreSQL
+  на порту 5434 для локальных инструментов; команды — в README.
 - Один nginx (упрощение референсной схемы с двумя).
 - nginx проставляет `X-Forwarded-For`/`X-Real-IP`; backend доверяет им
   только от адресов nginx из `APP_TRUSTED_PROXIES`. Разбор заголовков выполняет
@@ -612,10 +616,10 @@ db:
   дублирует. Для `/admin` — более строгий CSP (без доменов РСЯ).
 - Публикации хранятся в PostgreSQL, изображения — в volume `uploads`.
   Сохранение в админке вызывает `/api/revalidate` фронтенда (§4).
-- Единственная Compose-конфигурация — `docker-compose.prod.yml`;
-  в командах явно задаются `--env-file .env.production -f docker-compose.prod.yml`.
-- Dev-режим: отдельный контейнер PostgreSQL, локальные Hypercorn,
-  `python -m src.background_tasks.news_scheduler` и `next dev`; в dev
+- Production-команды явно задают
+  `--env-file backend/.env.production -f docker-compose.prod.yml`.
+- Dev-режим: `docker compose up db backend news-analyzer-scheduler` и
+  локальный `next dev`; в dev
   `next.config.ts` содержит rewrites `/api/* → http://localhost:8000`
   (CORS не нужен и локально; Admin API доступен на том же origin).
 

@@ -46,19 +46,17 @@ prod-хостинг (к этапу 7), механика рассылок (вне
 - Backend: FastAPI-приложение с `/api/health` (пока без проверки БД),
   settings (pydantic-settings), логирование, `requirements.txt` с
   зафиксированными версиями, запуск `hypercorn --reload`.
-- `Dockerfile` бэкенда и первоначальная dev-конфигурация: сервисы `db`
+- `Dockerfile` бэкенда и `docker-compose.yml` (dev): сервисы `db`
   (postgres:16-alpine, healthcheck по `POSTGRES_DB`, volume `pg_data`, порт
   `5434:5432` для IDE) и `backend`; env из `backend/.env`.
-  Dev Compose удалён 12.10.2026 по поручению владельца; актуальный локальный
-  запуск описан в README, production использует `docker-compose.prod.yml`.
 - Frontend: Next.js + TS + Tailwind, базовый layout, запуск `next dev`;
   dev-rewrites `/api/* → http://localhost:8000` в `next.config.ts`;
   `.env.example` с `API_INTERNAL_URL`.
 - Обновлённый `README.md` (стек, быстрый старт) — по шаблону README референса.
 - Базовые проверки в обоих проектах: pytest (backend), vitest + lint (frontend).
 
-**DoD:** `GET /api/health` → 200 локально и в Docker;
-`db` проходит healthcheck; frontend отдаёт пустую страницу
+**DoD:** `GET /api/health` → 200 локально и в Docker (`docker compose up
+db backend`); `db` проходит healthcheck; frontend отдаёт пустую страницу
 с layout; тесты/линт зелёные.
 
 ## Этап 1 — backend: контент, БД и API `[x]`
@@ -705,7 +703,8 @@ ESLint, TypeScript и production-сборка frontend — **passed**. Backend-�
 приёмка редактора, скринридеры и нативный zoom остаются открытыми.
 Логи проверок: `C:/Users/user/AppData/Local/Temp/bks-lab-catalogue-20261012-165914/`.
 
-По дополнительному поручению удалена dev Compose-конфигурация; команды
-локальной разработки обновлены в README. Production Compose проверен
-для IP и домена; отдельный контейнер PostgreSQL, локальный Alembic и
-первый/повторный seed — **passed**.
+Dev Compose восстановлен в варианте с `env_file: ./backend/.env`.
+Production env размещается в `backend/.env.production`; генератор,
+backup, продление сертификатов и инструкции используют этот путь.
+Проверены dev/prod Compose (включая профиль tools), создание env и защита
+от перезаписи, Bash-синтаксис эксплуатационных скриптов — **passed**.

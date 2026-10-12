@@ -115,13 +115,14 @@ LLM; авторизация и Origin для всех API; реальные UI-�
 Команды установки, начальные справочники и env приведены в
 [README](../README.md#news-analyzer). В production backend применяет все
 миграции и seed до запуска scheduler. Оба процесса используют один образ
-и одну БД; HTTP-сервер сам очередь не обрабатывает. Локально миграции,
-seed и scheduler запускаются вручную по README. Для просмотра состояния
+и одну БД; HTTP-сервер сам очередь не обрабатывает. В dev Compose backend
+тоже выполняет миграции и seed автоматически; при прямом запуске Python
+они выполняются вручную по README. Для просмотра состояния
 production-контейнеров:
 
 ```bash
-docker compose --env-file .env.production -f docker-compose.prod.yml ps
-docker compose --env-file .env.production -f docker-compose.prod.yml logs --tail 50 news-analyzer-scheduler
+docker compose --env-file backend/.env.production -f docker-compose.prod.yml ps
+docker compose --env-file backend/.env.production -f docker-compose.prod.yml logs --tail 50 news-analyzer-scheduler
 ```
 
 Во вкладке «Каталог» (`/admin/news/sources/catalogue`) доступны **все 98
@@ -152,8 +153,8 @@ docker compose --env-file .env.production -f docker-compose.prod.yml logs --tail
 читает их через защищённый `GET /api/admin/news/sources/catalogue`.
 Каталог не создаёт подключённых источников и не включает сбор автоматически.
 
-В production после миграций backend автоматически запускает
-`python -m scripts.seed_news`.
+В контейнере backend после миграций автоматически запускается
+`python -m scripts.seed_news` (dev и production).
 Он загружает подсказки из `backend/src/data/news_source_catalogue.json`,
 а также начальные темы и рубрики. Пустая БД получает все начальные записи;
 повторный запуск добавляет только отсутствующие ID подсказок и имена
