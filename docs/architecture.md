@@ -574,7 +574,7 @@ docker-compose.yml
              # volume: uploads (изображения); env из backend/.env.production
   news-analyzer-scheduler # тот же backend-образ, APScheduler + очередь, без ports
   frontend   # Next.js standalone, мультистейдж Dockerfile, non-root
-  nginx      # HTTP по IP, затем HTTPS: /api/* → backend:8000 (включая /api/admin/*),
+  nginx      # HTTP по IP/домену, затем HTTPS: /api/* → backend:8000 (включая /api/admin/*),
              # всё остальное (включая /admin) → frontend:3000
   certbot    # профиль tools, Let's Encrypt webroot при подключении домена
 ```

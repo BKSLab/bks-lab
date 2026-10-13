@@ -8,9 +8,10 @@ Production-конфигурация находится в `docker-compose.yml`. 
 uploads и сертификаты хранятся в именованных volumes. Не выполнять
 `down -v` на рабочем сервере.
 
-Первый серверный стенд разворачивается по IP, домен подключается после
-его проверки. Конфигурация пока проверена только в отдельном локальном
-HTTPS-окружении; серверная приёмка ещё не проведена.
+Серверный стенд по IP запущен; 13.10.2026 через production nginx проверены
+вход в админку, серверная сессия, открытие обзора и выход. Настройки проекта
+подготовлены для `http://bks-lab.ru`, пока обновляется DNS. HTTPS подключается
+отдельно после выпуска сертификата; полная ручная приёмка остаётся открытой.
 
 Первый production-запуск выполняется с пустой БД: локальная БД, публикации
 и uploads не переносятся. Все статьи, заметки и проекты создаются только
@@ -19,10 +20,11 @@ HTTPS-окружении; серверная приёмка ещё не пров
 
 ## Перед первым запуском
 
-Нужен Linux-сервер с Docker Engine и Compose v2, Git и Python 3. Первый
-стенд проверяется на `91.218.114.82`, публичный DNS `bks-lab.ru` пока не
-меняется. Первый стенд работает по HTTP на порту 80 без сертификата;
-домен и HTTPS на порту 443 подключаются после проверки стенда.
+Нужен Linux-сервер с Docker Engine и Compose v2, Git и Python 3.
+Шаблоны env используют `bks-lab.ru` по HTTP на порту 80 без сертификата.
+Домен должен использовать DNS-серверы созданной зоны, а его A-запись —
+указывать на `91.218.114.82`. До обновления DNS стенд доступен по IP.
+HTTPS на порту 443 включается только после выпуска сертификата.
 Доступ к серверу предоставляет владелец.
 
 ```bash
@@ -110,7 +112,53 @@ docker compose --env-file backend/.env.production -f docker-compose.yml exec -T 
 с `build --no-cache frontend`, затем пересоздать контейнеры. Проверять
 `http://91.218.114.82`, включая вход в админку, редактор и каталог.
 
-## Подключение домена и HTTPS после проверки IP
+## Переход работающего стенда с IP на домен: HTTP
+
+В существующих приватных env-файлах изменить только параметры ниже,
+сохранив пароли, ключи и остальные значения. `git pull` эти файлы не обновляет;
+повторно запускать генератор env или заменять рабочие файлы шаблонами не нужно.
+
+`backend/.env.production`:
+
+```dotenv
+SITE_HOST=bks-lab.ru
+ADMIN_ALLOWED_ORIGINS=["http://bks-lab.ru","http://91.218.114.82"]
+ADMIN_COOKIE_SECURE=false
+```
+
+`frontend/.env.production`:
+
+```dotenv
+SITE_HOST=bks-lab.ru
+SITE_URL=http://bks-lab.ru
+```
+
+В Compose оставить стандартный HTTP-шаблон. Если `NGINX_TEMPLATE_DIR`
+указан явно в backend env, его значение должно быть `./infra/nginx/http`.
+Вход по IP остаётся разрешён на время перехода; сессии домена и IP
+раздельные, поэтому на домене потребуется войти заново.
+
+После обновления файлов на сервере:
+
+```bash
+docker compose --env-file backend/.env.production -f docker-compose.yml config --quiet
+docker compose --env-file backend/.env.production -f docker-compose.yml build --no-cache frontend
+docker compose --env-file backend/.env.production -f docker-compose.yml up -d --no-deps --no-build --force-recreate --wait backend news-analyzer-scheduler frontend nginx
+docker compose --env-file backend/.env.production -f docker-compose.yml exec -T nginx nginx -t
+```
+
+База уже должна работать; команда пересоздаёт только приложения и nginx.
+Пересборка frontend обновляет canonical, Open Graph, robots.txt и sitemap.
+До распространения DNS маршрутизацию можно проверить с самого сервера:
+
+```bash
+curl --fail --resolve bks-lab.ru:80:127.0.0.1 http://bks-lab.ru/api/health
+```
+
+После обновления DNS проверить `http://bks-lab.ru`, `/admin/login`,
+`/robots.txt` и `/sitemap.xml`. Основной адрес — без `www`.
+
+## Подключение HTTPS после обновления DNS
 
 Настроить A-запись `bks-lab.ru` на `91.218.114.82`; после её обновления
 выпустить доменный сертификат. Работающий nginx обслуживает ACME challenge
@@ -129,8 +177,7 @@ docker compose --env-file backend/.env.production -f docker-compose.yml run --rm
 
 ```bash
 docker compose --env-file backend/.env.production -f docker-compose.yml build --no-cache frontend
-docker compose --env-file backend/.env.production -f docker-compose.yml up -d --build --wait backend news-analyzer-scheduler frontend
-docker compose --env-file backend/.env.production -f docker-compose.yml up -d --force-recreate nginx
+docker compose --env-file backend/.env.production -f docker-compose.yml up -d --no-deps --no-build --force-recreate --wait backend news-analyzer-scheduler frontend nginx
 docker compose --env-file backend/.env.production -f docker-compose.yml exec -T nginx nginx -t
 ```
 
@@ -139,15 +186,16 @@ docker compose --env-file backend/.env.production -f docker-compose.yml exec -T 
 Скрипт проверяет срок сертификата через certbot, проверяет nginx и
 перечитывает сертификат. Отслеживать ошибки cron.
 
-При ошибке выпуска доменного сертификата сохранить рабочий HTTP-стенд по IP и
-его `SITE_HOST`, исправить DNS/доступность challenge и повторить выпуск.
-Не менять конфигурацию на домен до появления его сертификата.
+При ошибке выпуска доменного сертификата сохранить рабочую HTTP-конфигурацию,
+исправить DNS/доступность challenge и повторить выпуск. HTTPS-шаблон и
+`ADMIN_COOKIE_SECURE=true` включать только после появления сертификата.
 
 ## Проверка запуска
 
 - `docker compose ... ps`: db/backend/news-analyzer-scheduler/frontend/nginx healthy.
-- `http://91.218.114.82/api/health` на первом стенде: 200. После подключения
-  домена — `https://bks-lab.ru/api/health`: 200, HTTP перенаправляет на HTTPS.
+- `http://bks-lab.ru/api/health`: 200 после обновления DNS; на стенде по IP —
+  `http://91.218.114.82/api/health`. После подключения сертификата
+  `https://bks-lab.ru/api/health`: 200, HTTP перенаправляет на HTTPS.
 - Главная, пустые списки блога/заметок/проектов и `/sitemap.xml` открываются
   без ошибок и используют боевой домен. После создания материала в админке
   его страница и sitemap обновляются без пересборки frontend.
@@ -161,7 +209,8 @@ docker compose --env-file backend/.env.production -f docker-compose.yml exec -T 
   ответа, полным текстом и датой. Подписка появляется в разделе подписчиков.
 
 Admin POST принимает только Origin из `ADMIN_ALLOWED_ORIGINS`, совпадающий
-с `SITE_URL`: HTTP на первом стенде, HTTPS после подключения домена. Публичный вход —
+с `SITE_URL`: HTTP на стенде и при переходе на домен, HTTPS после выпуска сертификата.
+На время перехода дополнительно разрешён HTTP Origin текущего IP. Публичный вход —
 nginx: он заменяет входящие `X-Real-IP` и `X-Forwarded-For` адресом посетителя.
 Backend использует `X-Real-IP` для статистики и лимитов; его порт наружу
 не публикуется. Сеть Docker — обычная `bridge` с автоматическими адресами;
