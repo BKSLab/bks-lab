@@ -2,14 +2,12 @@
 
 import hashlib
 import hmac
-from ipaddress import ip_network
 
 import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
 
 from src.db.models import PageView
-from src.core.settings import get_settings
 
 BROWSER_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0"
 
@@ -150,13 +148,13 @@ async def test_pageview_rate_limit(client: AsyncClient) -> None:
     assert codes[-1].json() == {"detail": "Rate limit exceeded"}
 
 
-async def test_untrusted_forwarded_headers_cannot_bypass_rate_limit_or_change_hash(
+async def test_invalid_real_ip_falls_back_to_peer_for_limit_and_hash(
     client: AsyncClient, session_factory
 ) -> None:
     responses = [
         await post_view(client, headers={
             "X-Forwarded-For": f"203.0.113.{number}",
-            "X-Real-IP": f"192.0.2.{number}",
+            "X-Real-IP": f"invalid-{number}",
         })
         for number in range(1, 5)
     ]
@@ -168,14 +166,14 @@ async def test_untrusted_forwarded_headers_cannot_bypass_rate_limit_or_change_ha
 
 
 @pytest.mark.parametrize("client_ip", ["10.0.0.2"], indirect=True)
-async def test_trusted_proxy_chain_ignores_spoofed_prefix_for_limit_and_hash(
-    client: AsyncClient, session_factory, monkeypatch
+async def test_nginx_real_ip_is_used_for_limit_and_hash(
+    client: AsyncClient, session_factory
 ) -> None:
-    monkeypatch.setattr(get_settings().app, "trusted_proxies", (ip_network("10.0.0.0/24"),))
     real_client = "198.51.100.8"
     responses = [
         await post_view(client, headers={
-            "X-Forwarded-For": f"203.0.113.{number}, {real_client}, 10.0.0.3",
+            "X-Real-IP": real_client,
+            "X-Forwarded-For": f"203.0.113.{number}",
         })
         for number in range(1, 5)
     ]
@@ -186,3 +184,25 @@ async def test_trusted_proxy_chain_ignores_spoofed_prefix_for_limit_and_hash(
     views = await stored_views(session_factory)
     assert len(views) == 3
     assert {view.visitor_hash for view in views} == {expected}
+
+
+@pytest.mark.parametrize("client_ip", ["10.0.0.2"], indirect=True)
+async def test_visitors_behind_nginx_have_separate_limits_and_hashes(
+    client: AsyncClient, session_factory
+) -> None:
+    real_clients = ("198.51.100.8", "198.51.100.9")
+    for real_client in real_clients:
+        responses = [
+            await post_view(client, headers={"X-Real-IP": real_client})
+            for _ in range(4)
+        ]
+        assert [response.status_code for response in responses] == [202, 202, 202, 429]
+
+    daily_salt = hmac.new(b"test-stats-secret", b"2026-02-20", hashlib.sha256).hexdigest()
+    expected = {
+        hashlib.sha256(f"{daily_salt}{real_client}{BROWSER_UA}".encode()).hexdigest()
+        for real_client in real_clients
+    }
+    views = await stored_views(session_factory)
+    assert len(views) == 6
+    assert {view.visitor_hash for view in views} == expected

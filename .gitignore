@@ -229,9 +229,10 @@ next-env.d.ts
 # Docker / project data
 pg_data/
 
-# Keep .env.example templates tracked
+# Keep env templates tracked
 .env.*
 !.env.example
+!.env.dev.example
 !.env.production.example
 backups/
 

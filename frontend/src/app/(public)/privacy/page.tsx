@@ -2,7 +2,6 @@ import Link from "next/link";
 import { Breadcrumbs } from "@/components/content/Breadcrumbs";
 import { Container } from "@/components/layout/Container";
 import { adsConfigured } from "@/lib/ads";
-import { contactEmail } from "@/lib/contact";
 import { pageMetadata } from "@/lib/content";
 
 export const metadata = pageMetadata(
@@ -12,7 +11,6 @@ export const metadata = pageMetadata(
 );
 
 export default function PrivacyPage() {
-  const email = contactEmail();
   return (
     <Container className="pb-20 pt-8">
       <Breadcrumbs items={[{ title: "Политика конфиденциальности" }]} />
@@ -26,10 +24,10 @@ export default function PrivacyPage() {
           <h2 className="text-2xl font-semibold">Обратная связь</h2>
           <p>
             Когда вы отправляете форму «Связаться», имя, email и текст сообщения
-            передаются автору через почтовую службу. Email нужен для ответа.
-            В базе данных сайта обращения не сохраняются; отправленное сообщение
-            остаётся в почтовой переписке. Не включайте в сообщение пароли и другие
-            сведения, которые не нужны для ответа.
+            сохраняются вместе с датой обращения в базе данных сайта. Обращения
+            доступны только автору в закрытом разделе. Email нужен для ответа
+            вручную. Не включайте в сообщение пароли и другие сведения, которые
+            не нужны для ответа.
           </p>
         </section>
         <section className="mt-10 space-y-4">
@@ -88,9 +86,7 @@ export default function PrivacyPage() {
           <h2 className="text-2xl font-semibold">Вопросы о данных</h2>
           <p>
             Чтобы уточнить использование данных, исправить или удалить переданные
-            сведения либо отказаться от подписки, обратитесь к автору{email ? (
-              <> по адресу <a className="break-all text-accent underline underline-offset-4" href={`mailto:${email}`}>{email}</a></>
-            ) : <> через <Link className="text-accent underline underline-offset-4" href="/contacts">страницу контактов</Link></>}.
+            сведения либо отказаться от подписки, обратитесь к автору через <Link className="text-accent underline underline-offset-4" href="/contacts">страницу контактов</Link>.
             Для поиска обращения укажите использованный email, без паролей и
             документов.
           </p>

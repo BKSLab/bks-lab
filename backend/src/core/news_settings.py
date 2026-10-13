@@ -14,7 +14,7 @@ class NewsSettings(BaseSettings):
     """Environment defaults; editorial settings can be overridden in PostgreSQL."""
 
     model_config = SettingsConfigDict(
-        env_prefix="NEWS_", env_file=".env", extra="ignore", hide_input_in_errors=True
+        env_prefix="NEWS_", env_file=".env.dev", extra="ignore", hide_input_in_errors=True
     )
 
     enabled: bool = True

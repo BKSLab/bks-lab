@@ -1,15 +1,14 @@
 """Application configuration via pydantic-settings.
 
-Reads `backend/.env` (working directory of the backend process).
+Reads `backend/.env.dev` (working directory of the backend process).
 `SecretStr` is used only for real secrets.
 """
 
 from functools import lru_cache
-from ipaddress import IPv4Network, IPv6Network
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from pydantic import Field, SecretStr, field_validator, model_validator
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import URL
 
@@ -20,7 +19,7 @@ BACKEND_ROOT = Path(__file__).resolve().parent.parent.parent
 
 class AppSettings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_prefix="APP_", env_file=".env", extra="ignore"
+        env_prefix="APP_", env_file=".env.dev", extra="ignore"
     )
 
     name: str = "BKS Lab"
@@ -28,13 +27,10 @@ class AppSettings(BaseSettings):
     host: str = "0.0.0.0"
     port: int = 8000
     log_level: str = "INFO"
-    # JSON array of proxy IP addresses/CIDRs; no forwarded headers are
-    # trusted until the deployment explicitly configures its proxy peers.
-    trusted_proxies: tuple[IPv4Network | IPv6Network, ...] = ()
 
 
 class DBSettings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_file=".env.dev", extra="ignore")
 
     postgres_user: str = "bkslab"
     postgres_password: SecretStr = Field(default=SecretStr("bkslab-dev-password"))
@@ -57,7 +53,7 @@ class DBSettings(BaseSettings):
 
 class ContentSettings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_prefix="CONTENT_", env_file=".env", extra="ignore"
+        env_prefix="CONTENT_", env_file=".env.dev", extra="ignore"
     )
 
     # Directory with Markdown content (articles/notes/projects subdirectories);
@@ -69,7 +65,7 @@ class ContentSettings(BaseSettings):
 
 class MediaSettings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_prefix="MEDIA_", env_file=".env", extra="ignore"
+        env_prefix="MEDIA_", env_file=".env.dev", extra="ignore"
     )
 
     # Uploaded images root; served at /uploads/ (backend in dev, nginx in prod).
@@ -82,7 +78,7 @@ class MediaSettings(BaseSettings):
 
 class RevalidateSettings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_prefix="REVALIDATE_", env_file=".env", extra="ignore", populate_by_name=True
+        env_prefix="REVALIDATE_", env_file=".env.dev", extra="ignore", populate_by_name=True
     )
 
     # Base URL of the frontend container, e.g. http://frontend:3000;
@@ -105,7 +101,7 @@ class RevalidateSettings(BaseSettings):
 
 class StatsSettings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_prefix="STATS_", env_file=".env", extra="ignore"
+        env_prefix="STATS_", env_file=".env.dev", extra="ignore"
     )
 
     # Master secret for visitor hashing; daily salt is derived as
@@ -118,7 +114,7 @@ class StatsSettings(BaseSettings):
 
 class AdminSettings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_prefix="ADMIN_", env_file=".env", extra="ignore"
+        env_prefix="ADMIN_", env_file=".env.dev", extra="ignore"
     )
 
     username: str = ""
@@ -148,29 +144,6 @@ class AdminSettings(BaseSettings):
         return origins
 
 
-class SMTPSettings(BaseSettings):
-    model_config = SettingsConfigDict(
-        env_prefix="SMTP_", env_file=".env", extra="ignore"
-    )
-
-    host: str = ""
-    port: int = Field(default=587, ge=1, le=65535)
-    username: str = ""
-    password: SecretStr = SecretStr("")
-    sender: str = ""
-    recipient: str = ""
-    use_tls: bool = False
-    start_tls: bool = True
-    timeout: float = Field(default=10, gt=0, le=60)
-
-    @model_validator(mode="after")
-    def validate_tls(self) -> "SMTPSettings":
-        """Implicit TLS and STARTTLS are mutually exclusive."""
-        if self.use_tls and self.start_tls:
-            raise ValueError("Set SMTP_START_TLS=false when SMTP_USE_TLS=true")
-        return self
-
-
 class Settings:
     """Aggregator for domain-specific settings groups."""
 
@@ -182,7 +155,6 @@ class Settings:
         self.revalidate = RevalidateSettings()
         self.stats = StatsSettings()
         self.admin = AdminSettings()
-        self.smtp = SMTPSettings()
         self.news = NewsSettings()
 
 

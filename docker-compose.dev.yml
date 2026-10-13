@@ -1,10 +1,9 @@
-# Общие настройки процессов из backend-образа (backend API и scheduler).
-# Значения БД берутся из backend/.env: в Docker это db:5432 (см. .env.example),
-# локальный запуск без Docker переопределяет их переменными в командной строке.
+# Shared backend API/scheduler settings for local development.
+# Docker uses db:5432 from backend/.env.dev; direct Python uses localhost:5434.
 x-backend-runtime: &backend-runtime
   build: ./backend
   image: bks-lab-backend:dev
-  env_file: ./backend/.env
+  env_file: ./backend/.env.dev
   volumes:
     - ./backend:/app
     - /app/.venv
@@ -15,7 +14,7 @@ services:
   # ── База данных ──────────────────────────────────────────────────────────
   db:
     image: postgres:16-alpine
-    env_file: ./backend/.env
+    env_file: ./backend/.env.dev
     restart: always
     ports:
       - "5434:5432"

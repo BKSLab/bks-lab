@@ -248,3 +248,13 @@ class SubscriberRow(BaseModel):
 
     email: str
     subscribed_at: datetime
+
+
+class FeedbackRow(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int = Field(description="Message ID.", examples=[1])
+    name: str = Field(description="Visitor name.", examples=["Visitor"])
+    email: str = Field(description="Contact address for a manual reply.", examples=["visitor@example.com"])
+    message: str = Field(description="Plain-text message.", examples=["I would like to discuss a project."])
+    created_at: datetime = Field(description="UTC receipt time.", examples=["2026-10-13T12:00:00Z"])

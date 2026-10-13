@@ -7,6 +7,7 @@ from src.db.models.content_revisions import ContentRevision
 from src.db.models.media_files import MediaFile
 from src.db.models.page_views import PageView
 from src.db.models.subscribers import Subscriber
+from src.db.models.feedback import FeedbackMessage
 from src.db.models.news_catalog import NewsCategory, NewsTopic
 from src.db.models.news_sources import NewsSource
 from src.db.models.news_source_catalogue import NewsSourceCatalogueEntry
@@ -16,7 +17,7 @@ from src.db.models.news_jobs import NewsJob, NewsSourceRun
 from src.db.models.news_settings import NewsSetting
 
 __all__ = [
-    "Base", "AdminSession", "ContentItem", "ContentRevision", "MediaFile", "PageView", "Subscriber", "NewsCategory",
+    "Base", "AdminSession", "ContentItem", "ContentRevision", "MediaFile", "PageView", "Subscriber", "FeedbackMessage", "NewsCategory",
     "NewsTopic", "NewsSource", "NewsSourceCatalogueEntry", "NewsItem", "NewsAnalysis", "NewsEditorialDecision",
     "NewsJob", "NewsSourceRun", "NewsSetting",
 ]

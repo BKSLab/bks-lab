@@ -10,7 +10,7 @@ from sqlalchemy import func, select
 
 from main import app
 from src.core.settings import get_settings
-from src.db.models import AdminSession, PageView, Subscriber
+from src.db.models import AdminSession, FeedbackMessage, PageView, Subscriber
 from src.dependencies.admin import require_admin
 from src.dependencies.services import get_utc_now
 
@@ -19,7 +19,7 @@ LOGIN = {"username": "test-admin", "password": "test-only-password"}
 ORIGIN = {"Origin": "http://test"}
 PROTECTED = [
     "/auth/me", "/overview", "/stats/timeseries", "/stats/pages",
-    "/stats/referrers", "/content", "/content/1", "/subscribers",
+    "/stats/referrers", "/content", "/content/1", "/subscribers", "/feedback",
 ]
 
 
@@ -43,7 +43,7 @@ def test_every_admin_endpoint_depends_on_require_admin():
         return {dependant.call}.union(*(dependency_calls(child) for child in dependant.dependencies))
 
     routes = [route for route in app.routes if isinstance(route, APIRoute) and route.path.startswith("/api/admin/")]
-    assert len([route for route in routes if not route.path.startswith("/api/admin/news/")]) == 20
+    assert len([route for route in routes if not route.path.startswith("/api/admin/news/")]) == 21
     for route in routes:
         if route.path == "/api/admin/auth/login":
             continue
@@ -65,6 +65,41 @@ async def test_logout_also_requires_a_session(client):
     response = await client.post("/api/admin/auth/logout", headers=ORIGIN)
     assert response.status_code == 401
     assert response.headers["cache-control"] == "no-store"
+
+
+async def test_admin_feedback_lists_saved_messages_with_stable_paging(client, session_factory):
+    for number in range(3):
+        response = await client.post("/api/v1/feedback", json={
+            "name": f"Visitor {number}", "email": f"visitor{number}@example.com",
+            "message": f"Message {number}\nA second line.",
+        })
+        assert response.status_code == 200
+    async with session_factory() as session:
+        rows = list(await session.scalars(select(FeedbackMessage).order_by(FeedbackMessage.id)))
+        for row in rows:
+            row.created_at = NOW
+        ids = [row.id for row in reversed(rows)]
+        await session.commit()
+
+    await login(client)
+    response = await client.get("/api/admin/feedback?page_size=2")
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+    first = response.json()
+    second = (await client.get("/api/admin/feedback?page=2&page_size=2")).json()
+    assert first["total"] == 3 and first["pages"] == 2
+    assert [row["id"] for row in first["items"] + second["items"]] == ids
+    assert first["items"][0]["message"] == "Message 2\nA second line."
+    assert first["items"][0]["email"] == "visitor2@example.com"
+    assert set(first["items"][0]) == {"id", "name", "email", "message", "created_at"}
+    empty = (await client.get("/api/admin/feedback?page=8&page_size=2")).json()
+    assert empty["items"] == [] and empty["total"] == 3
+
+
+@pytest.mark.parametrize("query", ["page=0", "page_size=0", "page_size=51"])
+async def test_admin_feedback_validates_pagination(client, query):
+    await login(client)
+    assert (await client.get(f"/api/admin/feedback?{query}")).status_code == 422
 
 
 @pytest.mark.parametrize("data", [

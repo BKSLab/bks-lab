@@ -43,6 +43,7 @@ async def test_migrations_upgrade_check_downgrade_and_reupgrade(postgres_url):
         names = await connection.run_sync(lambda conn: inspect(conn).get_table_names())
         assert "content_items" in names and "page_views" in names
         assert "admin_sessions" not in names and "subscribers" not in names
+        assert "feedback_messages" not in names
     await engine.dispose()
     await alembic("upgrade", "head")
     await alembic("check")
@@ -70,4 +71,5 @@ async def test_actual_alembic_environment_accepts_special_credentials_offline(pa
     assert process.returncode == 0, "Alembic rejected a synthetic credential with URL delimiters"
     assert b"CREATE TABLE admin_sessions" in stdout
     assert b"CREATE TABLE subscribers" in stdout
+    assert b"CREATE TABLE feedback_messages" in stdout
     assert password.encode() not in stdout

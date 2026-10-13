@@ -23,7 +23,7 @@ HTTPS-окружении; серверная приёмка ещё не пров
 стенд проверяется на `91.218.114.82`, публичный DNS `bks-lab.ru` пока не
 меняется. Порты 80/443 должны быть доступны; домен подключается после
 проверки стенда.
-Доступ к серверу и почтовый аккаунт предоставляет владелец.
+Доступ к серверу предоставляет владелец.
 
 ```bash
 python3 scripts/init-production-env.py
@@ -33,23 +33,21 @@ chmod 600 backend/.env.production frontend/.env.production
 
 Скрипт не перезаписывает существующий файл и не выводит секреты. Он создаёт
 разные случайные пароли БД/админки и секреты статистики/публикации. В закрытом
-редакторе заполнить `backend/.env.production`: `SITE_HOST` (hostname или IPv4 без схемы/порта),
-`CONTACT_EMAIL`, `SMTP_HOST`, порт, логин/пароль, `SMTP_SENDER`,
-`SMTP_RECIPIENT`. Логин админки — `ADMIN_USERNAME`; пароль — `ADMIN_PASSWORD`.
+редакторе заполнить `backend/.env.production`: `SITE_HOST` (hostname или IPv4 без схемы/порта).
+Логин админки — `ADMIN_USERNAME`; пароль — `ADMIN_PASSWORD`.
 В `frontend/.env.production` задать тот же `SITE_HOST`,
-`SITE_URL=https://SITE_HOST`, публичный `CONTACT_EMAIL` и тот же
+`SITE_URL=https://SITE_HOST` и тот же
 `REVALIDATE_SECRET`, что у backend. Этот файл используется frontend и nginx;
 backend и БД, как в референсах, получают `backend/.env.production`.
 В backend-файле также согласовать `ADMIN_ALLOWED_ORIGINS` с `SITE_URL`.
 Env-файлы не хранить в git и не прикладывать к отчётам.
 
-Для порта 587 обычно нужны `SMTP_START_TLS=true`, `SMTP_USE_TLS=false`;
-для implicit TLS на 465 — наоборот. Сверить с настройками своего провайдера.
-Без SMTP сайт работает, но форма обращения честно отвечает недоступностью
-почты и не сообщает об успешной отправке. Подписка сохраняет email;
+Форма обращения сохраняет сообщение в PostgreSQL; владелец читает его в
+`/admin/feedback` и при необходимости отвечает вручную. Дополнительное
+подключение для обратной связи не требуется. Подписка сохраняет email;
 автоматическая рассылка не входит в текущую реализацию.
 
-`SITE_URL`, `CONTACT_EMAIL`, рекламные `NEXT_PUBLIC_*` из frontend-файла
+`SITE_URL` и рекламные `NEXT_PUBLIC_*` из frontend-файла
 используются при сборке через BuildKit secret. После их изменения выполнить
 `docker compose --env-file backend/.env.production -f docker-compose.yml build --no-cache frontend`
 и пересоздать frontend: содержимое secrets не меняет Docker build cache.
@@ -166,14 +164,14 @@ docker compose --env-file backend/.env.production -f docker-compose.yml exec -T 
   после выхода прежняя сессия недействительна.
 - Cookie `admin_session`: HttpOnly, Secure, SameSite=Strict, Path=/.
   Path нужен для серверной проверки страниц `/admin`; JS токен не читает.
-- Сообщение формы приходит в настроенный ящик, подписка появляется в админке.
-  Проверка доставки на настоящую почту выполняется владельцем перед запуском.
+- Обращение из формы появляется в `/admin/feedback` с именем, контактом для
+  ответа, полным текстом и датой. Подписка появляется в разделе подписчиков.
 
-Admin POST принимает только Origin `https://SITE_HOST`. Backend доверяет
-IP-заголовкам только от фиксированного IP nginx; входящая пользовательская
-цепочка X-Forwarded-For заменяется. Если заданная Docker-подсеть конфликтует
-с сетью сервера, поменять `BKS_NETWORK_SUBNET`, `BKS_PROXY_IP` и
-`APP_TRUSTED_PROXIES` вместе.
+Admin POST принимает только Origin `https://SITE_HOST`. Публичный вход —
+nginx: он заменяет входящие `X-Real-IP` и `X-Forwarded-For` адресом посетителя.
+Backend использует `X-Real-IP` для статистики и лимитов; его порт наружу
+не публикуется. Сеть Docker — обычная `bridge` с автоматическими адресами;
+контейнеры этой сети считаются доверенными.
 
 Заголовки безопасности устанавливает nginx. CSP пока `Report-Only`:
 проверить отчёты браузера с рабочими сценариями, затем перейти к enforced

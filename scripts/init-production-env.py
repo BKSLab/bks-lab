@@ -14,7 +14,7 @@ def main() -> None:
     descriptor = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as output:
         output.write(template)
-    print("Created backend/.env.production. Set hostname, contact and SMTP before deployment.")
+    print("Created backend/.env.production. Set hostname and admin username before deployment.")
 
 
 if __name__ == "__main__":

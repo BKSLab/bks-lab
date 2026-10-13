@@ -102,9 +102,7 @@ services:
       interval: 15s
       timeout: 5s
       retries: 5
-    networks:
-      app:
-        ipv4_address: ${BKS_PROXY_IP:-172.30.55.10}
+    networks: [app]
     logging: *logging
 
   certbot:
@@ -128,6 +126,4 @@ volumes:
 
 networks:
   app:
-    ipam:
-      config:
-        - subnet: ${BKS_NETWORK_SUBNET:-172.30.55.0/24}
+    driver: bridge

@@ -60,5 +60,9 @@ class SubscriberRepositoryError(RepositoryError):
     """Subscriber storage failed."""
 
 
+class FeedbackRepositoryError(RepositoryError):
+    """Feedback storage failed."""
+
+
 class MediaFileRepositoryError(RepositoryError):
     """Failure in the media_files storage repository."""

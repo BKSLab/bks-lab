@@ -2,6 +2,14 @@ export interface AdminUser {
   username: string;
 }
 
+export interface AdminFeedback {
+  id: number;
+  name: string;
+  email: string;
+  message: string;
+  created_at: string;
+}
+
 export interface AdminPaged<T> {
   items: T[];
   total: number;

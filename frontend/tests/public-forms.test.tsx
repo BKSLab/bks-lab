@@ -100,7 +100,7 @@ describe("public forms", () => {
 
   it.each([
     [429, /через час/],
-    [503, /Почта временно недоступна/],
+    [503, /Не удалось сохранить обращение/],
     [500, /Не удалось получить подтверждение/],
   ] as const)("reports HTTP %s without success and preserves the message", async (code, message) => {
     fetchMock.mockResolvedValue(json({ detail: "failure" }, code));

@@ -12,13 +12,13 @@ from src.dependencies.admin import (
 )
 from src.dependencies.services import (
     AdminAuthServiceDep, AdminContentServiceDep, AdminStatsServiceDep,
-    ContentAdminServiceDep, MediaServiceDep, SubscriberServiceDep,
+    ContentAdminServiceDep, FeedbackServiceDep, MediaServiceDep, SubscriberServiceDep,
 )
 from src.schemas.admin import (
     AdminIdentity, ContentCreate, ContentItemDetail, ContentItemFull, ContentItemRow,
     ContentPatch, ContentPreviewRequest, ContentPreviewResponse, ContentRevisionDetail,
     ContentRevisionRow, ContentStatus, ContentStatusChange, ContentType, LoginRequest,
-    LoginResponse, MediaFileRow, Metric, Overview, PageStatsRow, Period, ReferrerRow,
+    FeedbackRow, LoginResponse, MediaFileRow, Metric, Overview, PageStatsRow, Period, ReferrerRow,
     SubscriberRow, TimeseriesPoint,
 )
 from src.schemas.pagination import Paged
@@ -305,6 +305,18 @@ async def subscribers(
     service: SubscriberServiceDep, page: Page = 1, page_size: PageSize = 20,
 ) -> Paged[SubscriberRow]:
     """Read the subscriber registry; the API provides no mutation route."""
+    return await service.get_page(page=page, page_size=page_size)
+
+
+@protected.get(
+    "/feedback", response_model=Paged[FeedbackRow], summary="Read received feedback",
+    description="List visitor messages, newest first. Available only to the authenticated owner.",
+    operation_id="adminFeedback", response_description="Paged visitor messages and UTC receipt times.",
+)
+async def feedback_messages(
+    service: FeedbackServiceDep, page: Page = 1, page_size: PageSize = 20,
+) -> Paged[FeedbackRow]:
+    """Read received feedback; replies are handled manually outside the application."""
     return await service.get_page(page=page, page_size=page_size)
 
 

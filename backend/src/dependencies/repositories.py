@@ -13,6 +13,7 @@ from src.repositories.content_revisions import ContentRevisionRepository
 from src.repositories.media_files import MediaFileRepository
 from src.repositories.admin_sessions import AdminSessionRepository
 from src.repositories.subscribers import SubscriberRepository
+from src.repositories.feedback import FeedbackRepository
 from src.repositories.stats import StatsRepository
 
 
@@ -62,3 +63,11 @@ def get_subscriber_repository(session: DbSessionDep) -> SubscriberRepository:
 
 AdminSessionRepositoryDep = Annotated[AdminSessionRepository, Depends(get_admin_session_repository)]
 SubscriberRepositoryDep = Annotated[SubscriberRepository, Depends(get_subscriber_repository)]
+
+
+def get_feedback_repository(session: DbSessionDep) -> FeedbackRepository:
+    """Per-request feedback repository."""
+    return FeedbackRepository(session)
+
+
+FeedbackRepositoryDep = Annotated[FeedbackRepository, Depends(get_feedback_repository)]

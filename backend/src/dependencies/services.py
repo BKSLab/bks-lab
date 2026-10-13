@@ -12,11 +12,11 @@ from src.dependencies.repositories import (
     AdminSessionRepositoryDep,
     ContentItemRepositoryDep,
     ContentRevisionRepositoryDep,
+    FeedbackRepositoryDep,
     MediaFileRepositoryDep,
     StatsRepositoryDep,
     SubscriberRepositoryDep,
 )
-from src.clients.mail import MailClient
 from src.clients.revalidation import RevalidationClient
 from src.services.admin_auth import AdminAuthService
 from src.services.admin_content import AdminContentService
@@ -141,17 +141,9 @@ def get_media_service(files: MediaFileRepositoryDep) -> MediaService:
 MediaServiceDep = Annotated[MediaService, Depends(get_media_service)]
 
 
-def get_mail_client() -> MailClient:
-    """Use only explicitly configured SMTP delivery."""
-    return MailClient(get_settings().smtp)
-
-
-MailClientDep = Annotated[MailClient, Depends(get_mail_client)]
-
-
-def get_feedback_service(mail_client: MailClientDep) -> FeedbackService:
+def get_feedback_service(repository: FeedbackRepositoryDep) -> FeedbackService:
     """Build the feedback use-case."""
-    return FeedbackService(mail_client)
+    return FeedbackService(repository)
 
 
 def get_subscriber_service(repository: SubscriberRepositoryDep) -> SubscriberService:

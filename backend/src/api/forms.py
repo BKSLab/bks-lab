@@ -11,15 +11,15 @@ router = APIRouter(tags=["forms"])
 
 @router.post(
     "/feedback", response_model=FeedbackResponse, summary="Send feedback",
-    description="Deliver a valid form via SMTP; silently ignore the website honeypot.",
-    operation_id="sendFeedback", response_description="Message delivered or honeypot ignored.",
+    description="Store a valid message for the admin inbox; silently ignore the website honeypot.",
+    operation_id="sendFeedback", response_description="Message stored or honeypot ignored.",
     responses={422: {"description": "Invalid form fields."}, 429: {"description": "Five requests per hour per IP."},
-               503: {"description": "SMTP unconfigured or temporarily unavailable."}},
+               503: {"description": "Message storage temporarily unavailable."}},
 )
 @limiter.limit("5/hour")
 async def feedback(request: Request, data: FeedbackRequest, service: FeedbackServiceDep) -> FeedbackResponse:
-    """Report success only after actual delivery, except for the anti-spam honeypot."""
-    await service.send(data)
+    """Report success after committing the message, except for the anti-spam honeypot."""
+    await service.submit(data)
     return FeedbackResponse()
 
 

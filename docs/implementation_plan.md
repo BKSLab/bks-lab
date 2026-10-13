@@ -46,9 +46,9 @@ prod-хостинг (к этапу 7), механика рассылок (вне
 - Backend: FastAPI-приложение с `/api/health` (пока без проверки БД),
   settings (pydantic-settings), логирование, `requirements.txt` с
   зафиксированными версиями, запуск `hypercorn --reload`.
-- `Dockerfile` бэкенда и `docker-compose.yml` (dev): сервисы `db`
+- `Dockerfile` бэкенда и `docker-compose.dev.yml` (dev): сервисы `db`
   (postgres:16-alpine, healthcheck по `POSTGRES_DB`, volume `pg_data`, порт
-  `5434:5432` для IDE) и `backend`; env из `backend/.env`.
+  `5434:5432` для IDE) и `backend`; env из `backend/.env.dev`.
 - Frontend: Next.js + TS + Tailwind, базовый layout, запуск `next dev`;
   dev-rewrites `/api/* → http://localhost:8000` в `next.config.ts`;
   `.env.example` с `API_INTERNAL_URL`.
@@ -230,7 +230,7 @@ focus соответствуют AA; кликабельных `div/span` нет 
 - Light theme: inline-скрипт `data-theme` в `<head>` до первого paint
   (точка заложена в этапе 2), переключатель (button с accessible name),
   `prefers-color-scheme` + localStorage, проверка контрастов обеих тем (ТЗ §13).
-- Backend — формы: `POST /feedback` (aiosmtplib, rate-limit, honeypot) и
+- Backend — формы: `POST /feedback` (обращения в `feedback_messages`, rate-limit, honeypot) и
   `POST /subscribe` (email в таблицу `subscribers`, идемпотентно, honeypot).
 - **Backend — Admin API (`/api/admin/*`)**: аутентификация по
   `docs/api_contract.md` (login/logout/me; cookie `admin_session` httpOnly +
@@ -238,7 +238,7 @@ focus соответствуют AA; кликабельных `div/span` нет 
   TTL 12 ч, скользящая; rate-limit login 5/мин; единый 401 на неверные
   креды; проверка Origin на POST; dependency `require_admin` на всех
   эндпоинтах). Эндпоинты: `/overview`, `/stats/timeseries`,
-  `/stats/pages`, `/stats/referrers`, `/content` (+`/{id}`), `/subscribers`.
+  `/stats/pages`, `/stats/referrers`, `/content` (+`/{id}`), `/subscribers`, `/feedback`.
   Фоновая задача чистки просроченных сессий.
 - **Frontend — админка (route group `(admin)`)**: собственный минимальный
   layout; `/admin/login` (форма с labels и текстовыми ошибками);
@@ -248,7 +248,8 @@ focus соответствуют AA; кликабельных `div/span` нет 
   сегодня/7д/30д, уники сегодня), графики временных рядов (**Recharts**
   через `next/dynamic` — только в админском бандле), топ страниц и
   referrer'ов; страница материалов (таблица `content_items` с просмотрами,
-  фильтры type/status, поиск); страница подписчиков. Базовая доступность
+  фильтры type/status, поиск); страницы подписчиков и обратной связи
+  (`/admin/feedback`, обращения из формы хранятся в БД). Базовая доступность
   (labels, focus, контраст).
 - **Рекламные слоты РСЯ (подготовка):** компонент `AdSlot`
   (`<aside aria-label="Реклама">`, параметризуемая фиксированная высота,
@@ -708,3 +709,32 @@ Production env размещается в `backend/.env.production`; генера
 backup, продление сертификатов и инструкции используют этот путь.
 Проверены dev/prod Compose (включая профиль tools), создание env и защита
 от перезаписи, Bash-синтаксис эксплуатационных скриптов — **passed**.
+
+## Обратная связь в админке — 13.10.2026
+
+По поручению владельца почтовая отправка удалена: форма «Связаться»
+сохраняет имя, email для ручного ответа, текст и UTC-время в
+`feedback_messages`. Владелец читает обращения в `/admin/feedback`;
+закрытый `GET /api/admin/feedback` возвращает страницы, новые первыми.
+Honeypot и лимит 5 обращений в час с IP сохранены. Успешный ответ формы
+выдаётся после commit, ошибка записи — 503. Текст в админке экранируется.
+Новая schema-only миграция — `0008`, после каталога источников `0007`.
+
+Удалены клиент и зависимость отправки, настройки `SMTP_*` и публичный
+`CONTACT_EMAIL` из кода, реальных env и шаблонов. Контактные данные
+посетителей и список подписчиков остаются данными в БД.
+
+Проверки: 511 backend-тестов прошли в общем прогоне; после исправления
+номера новой миграции повторно прошли все 4 проверки migration chain
+(upgrade/check/downgrade/reupgrade и offline со специальными паролями).
+Frontend — 252 passed, lint и TypeScript — passed. Production-сборки
+frontend и backend — passed; в свежем backend-образе отсутствует удалённая
+почтовая зависимость. На изолированном стенде проверены отправка формы,
+появление обращения только после входа, отображение текста без исполнения
+HTML и сохранность обращений и сессии после перезапуска backend.
+
+В Chrome проверены обе темы при 1280/320 CSS px: axe без violations,
+один main/H1, отсутствие горизонтального переполнения, увеличение текста
+до 200%, forced-colors/reduced-motion, skip-link с клавиатуры и смысл
+страницы без CSS. Скриншоты просмотрены. Скринридеры и нативный browser zoom
+в этой проверке не запускались; отложенная полная ручная приёмка не закрыта.

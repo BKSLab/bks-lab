@@ -1,4 +1,4 @@
-"""Rate limiter (slowapi), keyed by the client IP from forwarded headers."""
+"""Rate limiter (slowapi), keyed by the client IP normalized by nginx."""
 
 from slowapi import Limiter
 

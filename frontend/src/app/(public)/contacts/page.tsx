@@ -2,7 +2,6 @@ import { Breadcrumbs } from "@/components/content/Breadcrumbs";
 import { Container } from "@/components/layout/Container";
 import { PublicForm } from "@/components/forms/PublicForm";
 import { pageMetadata } from "@/lib/content";
-import { contactEmail } from "@/lib/contact";
 
 export const metadata = pageMetadata(
   "Контакты",
@@ -11,7 +10,6 @@ export const metadata = pageMetadata(
 );
 
 export default function ContactsPage() {
-  const email = contactEmail();
   return (
     <Container className="pb-20 pt-8">
       <Breadcrumbs items={[{ title: "Контакты" }]} />
@@ -22,11 +20,6 @@ export default function ContactsPage() {
           <p className="mt-6 max-w-prose text-xl text-text-muted">
             Обсудить проект, задать вопрос о статье или поделиться идеей.
           </p>
-          {email && (
-            <p className="mt-6 max-w-prose text-text-muted">
-              Напишите напрямую: <a className="break-all text-accent underline underline-offset-4" href={`mailto:${email}`}>{email}</a>.
-            </p>
-          )}
         </header>
         <section
           aria-labelledby="contact-title"

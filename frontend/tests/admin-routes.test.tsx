@@ -17,6 +17,7 @@ import AdminOverviewPage from "@/app/(admin)/admin/page";
 import AdminPagesPage from "@/app/(admin)/admin/stats/pages/page";
 import AdminReferrersPage from "@/app/(admin)/admin/stats/referrers/page";
 import AdminSubscribersPage from "@/app/(admin)/admin/subscribers/page";
+import AdminFeedbackPage from "@/app/(admin)/admin/feedback/page";
 import { adminFetch, requireAdmin } from "@/lib/admin-api";
 
 const item = {
@@ -39,6 +40,7 @@ describe("admin server routes", () => {
     ["content", () => AdminContentPage(emptyParams())],
     ["detail", () => AdminContentDetailPage({ params: Promise.resolve({ id: "1" }) })],
     ["subscribers", () => AdminSubscribersPage(emptyParams())],
+    ["feedback", () => AdminFeedbackPage(emptyParams())],
   ])("checks the session before loading %s data", async (_name, loadPage) => {
     vi.mocked(requireAdmin).mockRejectedValue(new Error("LOGIN_REQUIRED"));
     await expect(loadPage()).rejects.toThrow("LOGIN_REQUIRED");
@@ -106,5 +108,30 @@ describe("admin server routes", () => {
     render(<AdminLayout>{await AdminPagesPage({ searchParams: Promise.resolve({ period: "7d" }) })}</AdminLayout>);
     expect(screen.getByText("Заметка: example")).toBeTruthy();
     expect(adminFetch).toHaveBeenCalledWith("/stats/pages?period=7d&page=1&page_size=20");
+  });
+
+  it("shows feedback as plain text with contact details, UTC time and pagination", async () => {
+    const message = "First line\n<script>alert('message')</script>";
+    vi.mocked(adminFetch).mockResolvedValue({ ...paged, total: 45, page: 2, pages: 3, items: [{
+      id: 42, name: "Иван", email: "visitor@example.com", message, created_at: "2026-10-13T12:00:00Z",
+    }] });
+    const { container } = render(<AdminLayout>{await AdminFeedbackPage({ searchParams: Promise.resolve({ page: "2" }) })}</AdminLayout>);
+    expect(adminFetch).toHaveBeenCalledWith("/feedback?page=2&page_size=20");
+    expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("Обратная связь");
+    expect(screen.getByRole("link", { name: "Обратная связь" }).getAttribute("aria-current")).toBe("page");
+    expect(screen.getByRole("article", { name: "Сообщение от Иван" }).textContent).toContain(message);
+    expect(screen.getByText("visitor@example.com")).toBeTruthy();
+    expect(container.querySelector("script")).toBeNull();
+    expect(container.querySelector("time")?.getAttribute("datetime")).toBe("2026-10-13T12:00:00Z");
+    expect(screen.getByRole("link", { name: "Вперёд" }).getAttribute("href")).toBe("/admin/feedback?page=3");
+    expect((await axe(container)).violations).toEqual([]);
+  });
+
+  it("handles an empty feedback page and preserves the route when returning to the first page", async () => {
+    vi.mocked(adminFetch).mockResolvedValue({ ...paged, total: 1, page: 8, pages: 1 });
+    const { container } = render(<AdminLayout>{await AdminFeedbackPage({ searchParams: Promise.resolve({ page: "8" }) })}</AdminLayout>);
+    expect(screen.getByText("На этой странице обращений нет.")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "На первую" }).getAttribute("href")).toBe("/admin/feedback?page=1");
+    expect((await axe(container)).violations).toEqual([]);
   });
 });

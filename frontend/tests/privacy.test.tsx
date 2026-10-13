@@ -9,19 +9,17 @@ import { notesMetadata } from "@/components/content/NotesPageContent";
 afterEach(() => vi.unstubAllEnvs());
 
 describe("privacy and contact details", () => {
-  it("uses the configured address, describes actual storage and has accessible sections", async () => {
-    vi.stubEnv("CONTACT_EMAIL", "author@example.com");
+  it("describes stored feedback and has accessible sections", async () => {
     vi.stubEnv("NEXT_PUBLIC_ADS_ENABLED", "false");
     const { container } = render(<main><PrivacyPage /></main>);
-    expect(screen.getByRole("link", { name: "author@example.com" }).getAttribute("href")).toBe("mailto:author@example.com");
-    expect(screen.getByText(/В базе данных сайта обращения не сохраняются/)).toBeTruthy();
+    expect(screen.getByText(/сохраняются вместе с датой обращения в базе данных сайта/)).toBeTruthy();
+    expect(screen.getByText(/доступны только автору в закрытом разделе/)).toBeTruthy();
     expect(screen.getByText(/Рассылка пока не запущена/)).toBeTruthy();
     expect(screen.getByText(/Код Рекламной сети Яндекса не загружается/)).toBeTruthy();
     expect(await axe(container)).toHaveNoViolations();
   });
 
   it("links to the contact form without inventing an owner address", () => {
-    vi.stubEnv("CONTACT_EMAIL", "");
     render(<PrivacyPage />);
     expect(screen.getByRole("link", { name: "страницу контактов" }).getAttribute("href")).toBe("/contacts");
     expect(document.querySelector('a[href^="mailto:"]')).toBeNull();
@@ -35,10 +33,8 @@ describe("privacy and contact details", () => {
     expect(screen.queryByText(/Рекламные блоки отключены/)).toBeNull();
   });
 
-  it("offers the actual contact address alongside a working form", () => {
-    vi.stubEnv("CONTACT_EMAIL", "author@example.com");
+  it("offers a working contact form", () => {
     render(<ContactsPage />);
-    expect(screen.getByRole("link", { name: "author@example.com" }).getAttribute("href")).toBe("mailto:author@example.com");
     expect(screen.getByRole("form", { name: "Связаться с автором" })).toBeTruthy();
     expect(screen.queryByText(/ознакомительном режиме/)).toBeNull();
   });

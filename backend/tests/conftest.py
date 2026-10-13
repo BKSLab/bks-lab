@@ -12,13 +12,9 @@ from pathlib import Path
 # run with few requests. Each test resets the in-memory limiter.
 os.environ["STATS_SECRET"] = "test-stats-secret"
 os.environ["STATS_PAGEVIEW_RATE_LIMIT"] = "3/minute"
-os.environ["APP_TRUSTED_PROXIES"] = "[]"
 os.environ["ADMIN_USERNAME"] = ""
 os.environ["ADMIN_PASSWORD"] = ""
 os.environ["ADMIN_ALLOWED_ORIGINS"] = "[]"
-os.environ["SMTP_HOST"] = ""
-os.environ["SMTP_SENDER"] = ""
-os.environ["SMTP_RECIPIENT"] = ""
 # Uploads land in a scratch directory instead of the repo during tests.
 os.environ["MEDIA_DIR"] = tempfile.mkdtemp(prefix="bks-lab-test-uploads-")
 
@@ -33,7 +29,7 @@ from main import app
 from scripts.import_content_to_db import import_content
 from src.core.limiter import limiter
 from src.db.models import (
-    AdminSession, Base, ContentItem, ContentRevision, MediaFile, PageView, Subscriber,
+    AdminSession, Base, ContentItem, ContentRevision, FeedbackMessage, MediaFile, PageView, Subscriber,
     NewsSource, NewsSourceCatalogueEntry, NewsJob, NewsCategory, NewsTopic, NewsSetting,
 )
 from src.dependencies.db_session import get_db_session
@@ -106,6 +102,7 @@ async def _clean_tables(
         await session.execute(delete(MediaFile))
         await session.execute(delete(AdminSession))
         await session.execute(delete(Subscriber))
+        await session.execute(delete(FeedbackMessage))
         await session.commit()
 
 
@@ -282,7 +279,7 @@ def client_ip(request) -> str:
 
 @pytest.fixture(autouse=True)
 def reset_rate_limiter() -> Iterator[None]:
-    """Keep IP buckets isolated without trusting forged forwarded headers."""
+    """Keep rate-limit buckets isolated between tests."""
     limiter.reset()
     yield
     limiter.reset()

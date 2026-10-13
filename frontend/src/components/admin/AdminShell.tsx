@@ -11,6 +11,7 @@ const links = [
   { key: "content", href: "/admin/content", label: "Материалы" },
   { key: "news", href: "/admin/news", label: "Редакционный центр" },
   { key: "subscribers", href: "/admin/subscribers", label: "Подписчики" },
+  { key: "feedback", href: "/admin/feedback", label: "Обратная связь" },
 ] as const;
 
 export function AdminShell({ username, current, children }: {

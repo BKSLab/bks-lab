@@ -1,21 +1,31 @@
-"""Feedback use-case: silently discard the honeypot and report delivery truthfully."""
+"""Store genuine visitor messages and expose them only through the admin API."""
 
-from src.clients.mail import MailClient
-from src.exceptions.feedback import FeedbackUnavailableError, MailDeliveryError
+from src.exceptions.feedback import FeedbackUnavailableError
+from src.exceptions.repositories import FeedbackRepositoryError
+from src.repositories.feedback import FeedbackRepository
+from src.schemas.admin import FeedbackRow
 from src.schemas.forms import FeedbackRequest
+from src.schemas.pagination import Paged
 
 
 class FeedbackService:
-    def __init__(self, mail_client: MailClient) -> None:
-        self.mail_client = mail_client
+    def __init__(self, repository: FeedbackRepository) -> None:
+        self.repository = repository
 
-    async def send(self, data: FeedbackRequest) -> None:
-        """Send a genuine request once, or report that delivery is unavailable."""
+    async def submit(self, data: FeedbackRequest) -> None:
+        """Ignore honeypots and confirm genuine messages only after persistence."""
         if data.website:
             return
         try:
-            await self.mail_client.send_feedback(
+            await self.repository.create(
                 name=data.name, email=data.email, message=data.message
             )
-        except MailDeliveryError as error:
+        except FeedbackRepositoryError as error:
             raise FeedbackUnavailableError from error
+
+    async def get_page(self, *, page: int, page_size: int) -> Paged[FeedbackRow]:
+        """Return a page of received messages for the authenticated owner."""
+        rows, total = await self.repository.get_page(page=page, page_size=page_size)
+        return Paged[FeedbackRow].build(
+            [FeedbackRow.model_validate(row) for row in rows], total, page, page_size
+        )

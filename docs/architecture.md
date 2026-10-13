@@ -73,7 +73,7 @@ news-analyzer-scheduler ──► PostgreSQL (news_*: задания, матер
 
 Python 3.12, FastAPI, Hypercorn, Pydantic v2 + pydantic-settings,
 **SQLAlchemy 2 (async) + asyncpg + Alembic**, **PostgreSQL 16**,
-slowapi (rate-limit), aiosmtplib (форма «Связаться»),
+slowapi (rate-limit),
 APScheduler (только отдельный процесс News Analyzer),
 httpx + pytest + testcontainers для тестов. Версии фиксируются в
 `requirements.txt` при инициализации (ориентир — `requirements.txt`
@@ -123,7 +123,7 @@ backend/
   для API-тестов через `app.dependency_overrides`.
 - Конфиг — pydantic-settings, `.env` в корне backend, доступ через
   `@lru_cache get_settings()`. `SecretStr` — только для реальных секретов:
-  пароль БД, SMTP-пароль, пароль админки, `stats_secret` (мастер-секрет
+  пароль БД, пароль админки, `stats_secret` (мастер-секрет
   хэширования посетителей), `revalidate_secret` (вебхук фронтенда, §4).
 - Backend работает в **одном воркере Hypercorn**: счётчики slowapi —
   per-process; горизонтальное масштабирование не требуется (§5).
@@ -227,10 +227,10 @@ ON DELETE CASCADE), `revision_no` (сквозной номер внутри ма
 
 - **PostgreSQL 16** (`postgres:16-alpine`) — отдельный сервис `db` в
   docker-compose (healthcheck `pg_isready`, volume `pg_data`), конфигурация
-  через `backend/.env`. Подключение — async SQLAlchemy + asyncpg.
+  через `backend/.env.dev`. Подключение — async SQLAlchemy + asyncpg.
 - **Alembic** — миграции схемы, прогон при старте контейнера backend
   (`alembic upgrade head` в entrypoint, как в референсе).
-- Модели: `page_views`, `subscribers` (этап P1), `content_items` (контент),
+- Модели: `page_views`, `subscribers`, `feedback_messages` (формы), `content_items` (контент),
   `content_revisions` (история версий), `admin_sessions` (админка).
 - **`page_views`**: `id`, `viewed_at`, `path` (без query и якоря),
   `note_slug` (nullable — якорь `#note-<slug>` из ленты заметок),
@@ -247,12 +247,10 @@ ON DELETE CASCADE), `revision_no` (сквозной номер внутри ма
 - Следствие ротации (осознанное ограничение): уники считаются только в
   пределах суток; «уники за период» в админке — сумма дневных уников
   (завышена за счёт повторных визитов в разные дни).
-- IP клиента — из `X-Forwarded-For`/`X-Real-IP`, которые проставляет nginx;
-  backend доверяет им только при подключении от явно разрешённого прокси
-  (`APP_TRUSTED_PROXIES`, JSON-массив IP/CIDR; по умолчанию `[]`). Проверяется
-  реальный ASGI peer. Цепочка `X-Forwarded-For` разбирается справа налево до
-  первого недоверенного адреса; `X-Real-IP` используется только при отсутствии
-  XFF. Некорректная цепочка не принимается — используется адрес peer (§5).
+- IP клиента — из `X-Real-IP`, который nginx перезаписывает адресом
+  посетителя. Backend доступен только внутри Docker-сети; публичный вход —
+  nginx. При отсутствии, дублировании или некорректном значении заголовка
+  используется адрес непосредственного соединения (§5).
 - Сбор: фронтенд отправляет `POST /api/v1/stats/pageview`
   (`navigator.sendBeacon`, Blob `application/json`). Insert выполняется в
   фоне (FastAPI BackgroundTasks), ответ 202 сразу. Rate-limit через slowapi.
@@ -346,9 +344,11 @@ Celery, Redis/RabbitMQ, локальные модели, платные поис
 
 ### Формы (этап P1)
 
-- `POST /api/v1/feedback` — форма «Связаться»: aiosmtplib, rate-limit,
-  honeypot-поле против спама. При отсутствии SMTP или ошибке доставки — 503;
-  успешный ответ выдаётся после принятия сообщения SMTP-сервером.
+- `POST /api/v1/feedback` — форма «Связаться»: имя, email для ответа, текст
+  и дата сохраняются в `feedback_messages`; rate-limit и honeypot против
+  спама сохраняются. Успех возвращается после commit; при ошибке записи — 503.
+  Закрытый `GET /api/admin/feedback` выдаёт страницы обращений, новые первыми;
+  раздел `/admin/feedback` отображает их как текст. Ответы выполняются вручную.
 - `POST /api/v1/subscribe` — подписка: email в таблицу `subscribers`
   (идемпотентно), honeypot, rate-limit; список виден в админке.
   Механика рассылок не строится.
@@ -600,13 +600,12 @@ db:
 - Порт БД наружу не публикуем в prod. Dev Compose публикует PostgreSQL
   на порту 5434 для локальных инструментов; команды — в README.
 - Один nginx (упрощение референсной схемы с двумя).
-- nginx проставляет `X-Forwarded-For`/`X-Real-IP`; backend доверяет им
-  только от адресов nginx из `APP_TRUSTED_PROXIES`. Разбор заголовков выполняет
-  `src/utils/http.py`; Hypercorn сохраняет реальный адрес peer. При запуске
-  без прокси список остаётся пустым. В prod разрешаются конкретные адреса
-  nginx, а не все клиенты или вся общая сеть контейнеров; backend не имеет
-  публичного порта. nginx перезаписывает `X-Real-IP` адресом `$remote_addr`
-  и добавляет его в `X-Forwarded-For`.
+- Обычная Docker-сеть `bridge`, как в референсе: подсеть и IP назначаются
+  автоматически, сервисы обращаются друг к другу по именам.
+- nginx перезаписывает `X-Real-IP` и `X-Forwarded-For` адресом `$remote_addr`.
+  Backend использует `X-Real-IP` через `src/utils/http.py`; Hypercorn
+  сохраняет адрес непосредственного соединения для fallback. В prod backend
+  не имеет публичного порта; контейнеры этой сети считаются доверенными.
 - nginx-конфиг через envsubst-шаблон, как в референсе.
 - **Security-заголовки — только в nginx** (единое место: CSP
   Report-Only→enforce, HSTS, X-Frame-Options); `next.config.ts` их не
