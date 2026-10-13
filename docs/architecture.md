@@ -44,7 +44,7 @@ PostgreSQL 16, slowapi, Alembic — **берём из референса** (см
 
 ```text
 браузер
-   │ 443 (TLS)
+   │ 80 (HTTP по IP); 443 (HTTPS после подключения домена)
    ▼
 nginx ─┬─ /api/* ─────────► backend (FastAPI) ──► PostgreSQL (контейнер db):
        │   (включая /api/admin/*)                     content_items (источник
@@ -266,7 +266,7 @@ sqladmin — ради дашбордов, графиков и расширяем
   Контракт — `docs/api_contract.md` раздел «Admin API».
 - **Сессия:** `POST /api/admin/auth/login` (логин/пароль из `.env`,
   постоянно-временное сравнение `secrets.compare_digest`) ставит cookie
-  `admin_session`: **httpOnly + Secure + SameSite=Strict, Path=/**, случайный
+  `admin_session`: **httpOnly + SameSite=Strict, Path=/** (Secure при HTTPS), случайный
   токен (32 байта). Серверная сторона — таблица `admin_sessions`
   (`token_hash`, `created_at`, `expires_at`, `last_seen_at`): токен в БД
   хэширован, сессию можно отозвать. TTL 12 ч, скользящее продление.
@@ -574,9 +574,9 @@ docker-compose.yml
              # volume: uploads (изображения); env из backend/.env.production
   news-analyzer-scheduler # тот же backend-образ, APScheduler + очередь, без ports
   frontend   # Next.js standalone, мультистейдж Dockerfile, non-root
-  nginx      # 80/443, TLS: /api/* → backend:8000 (включая /api/admin/*),
+  nginx      # HTTP по IP, затем HTTPS: /api/* → backend:8000 (включая /api/admin/*),
              # всё остальное (включая /admin) → frontend:3000
-  certbot    # Let's Encrypt webroot
+  certbot    # профиль tools, Let's Encrypt webroot при подключении домена
 ```
 
 Сервис `db` — по образцу референса:
@@ -631,8 +631,8 @@ db:
   JSON-LD для статей; пагинация путём для индексации страниц 2+).
   `/admin` и `/api` закрыты от индексации в robots.txt.
 - Безопасность: security-заголовки в nginx (§5); rate-limit на формах,
-  статистике и `/api/admin/auth/login`; админ-сессия — httpOnly + Secure +
-  SameSite=Strict cookie, серверные сессии с хэшированным токеном и TTL;
+  статистике и `/api/admin/auth/login`; админ-сессия — httpOnly +
+  SameSite=Strict cookie (Secure при HTTPS), серверные сессии с хэшированным токеном и TTL;
   проверка Origin на мутациях; секреты только через `.env`; БД недоступна
   снаружи в prod; Admin API не смешан с публичным (отдельный префикс
   `/api/admin`, отдельный роутер, обязательная dependency `require_admin`).

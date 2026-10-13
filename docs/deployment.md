@@ -21,8 +21,8 @@ HTTPS-окружении; серверная приёмка ещё не пров
 
 Нужен Linux-сервер с Docker Engine и Compose v2, Git и Python 3. Первый
 стенд проверяется на `91.218.114.82`, публичный DNS `bks-lab.ru` пока не
-меняется. Порты 80/443 должны быть доступны; домен подключается после
-проверки стенда.
+меняется. Первый стенд работает по HTTP на порту 80 без сертификата;
+домен и HTTPS на порту 443 подключаются после проверки стенда.
 Доступ к серверу предоставляет владелец.
 
 ```bash
@@ -36,7 +36,7 @@ chmod 600 backend/.env.production frontend/.env.production
 редакторе заполнить `backend/.env.production`: `SITE_HOST` (hostname или IPv4 без схемы/порта).
 Логин админки — `ADMIN_USERNAME`; пароль — `ADMIN_PASSWORD`.
 В `frontend/.env.production` задать тот же `SITE_HOST`,
-`SITE_URL=https://SITE_HOST` и тот же
+`SITE_URL=http://SITE_HOST` и тот же
 `REVALIDATE_SECRET`, что у backend. Этот файл используется frontend и nginx;
 backend и БД, как в референсах, получают `backend/.env.production`.
 В backend-файле также согласовать `ADMIN_ALLOWED_ORIGINS` с `SITE_URL`.
@@ -90,41 +90,27 @@ docker compose --env-file backend/.env.production -f docker-compose.yml exec -T 
 Конфигурация — в `.env.production.example`, подробности — в
 [news_analyzer.md](news_analyzer.md).
 
-## HTTPS
+## Первый стенд по IP: HTTP
 
-Для первого стенда установить `SITE_HOST=91.218.114.82` в
-`backend/.env.production` до сборки frontend. Админка использует HTTPS и Secure
-cookie на обоих этапах; `ADMIN_ALLOWED_ORIGINS` в backend-файле должен
-соответствовать `SITE_URL` во frontend-файле.
+По умолчанию Compose использует `infra/nginx/http`: nginx обслуживает сайт,
+Admin API и загрузки на порту 80, без сертификата и перенаправления на HTTPS.
 
-### Первый стенд по IP
-
-Сначала запустить единственный nginx в режиме выдачи ACME challenge.
-В этом режиме приложение по HTTP не отдаётся.
+В `backend/.env.production` задать `SITE_HOST=91.218.114.82`,
+`ADMIN_ALLOWED_ORIGINS=["http://91.218.114.82"]`, `ADMIN_COOKIE_SECURE=false`.
+Во `frontend/.env.production` — тот же `SITE_HOST` и
+`SITE_URL=http://91.218.114.82`. Если `NGINX_TEMPLATE_DIR` задан явно,
+использовать `./infra/nginx/http`.
 
 ```bash
-NGINX_TEMPLATE_DIR=./infra/nginx/http docker compose --env-file backend/.env.production -f docker-compose.yml up -d nginx
-docker compose --env-file backend/.env.production -f docker-compose.yml run --rm certbot certonly --webroot --webroot-path /var/www/certbot --preferred-profile shortlived --ip-address 91.218.114.82 --cert-name 91.218.114.82 --email YOUR_CERTIFICATE_EMAIL --agree-tos --no-eff-email
-docker compose --env-file backend/.env.production -f docker-compose.yml up -d --force-recreate nginx
+docker compose --env-file backend/.env.production -f docker-compose.yml up -d --build --wait
 docker compose --env-file backend/.env.production -f docker-compose.yml exec -T nginx nginx -t
 ```
 
-Заменить `YOUR_CERTIFICATE_EMAIL` адресом владельца сертификата.
-Для IP нужен Certbot 5.4+ (образ закреплён в Compose), сертификат действует
-около шести дней. DNS-запись домена для этого не требуется.
-[Официальная инструкция Let's Encrypt](https://letsencrypt.org/2026/03/11/shorter-certs-certbot.html).
+При изменении URL в существующем frontend env сначала пересобрать frontend
+с `build --no-cache frontend`, затем пересоздать контейнеры. Проверять
+`http://91.218.114.82`, включая вход в админку, редактор и каталог.
 
-Проверять `https://91.218.114.82`, включая вход в админку, редактор и каталог.
-При ошибке certbot оставить bootstrap-режим, исправить доступность
-challenge и повторить выпуск. Не переключать nginx на HTTPS до появления
-сертификата.
-
-Добавить в cron на сервере запуск `bash /absolute/path/bks-lab/scripts/renew-certificates.sh`
-дважды в сутки. Скрипт проверяет срок сертификата через certbot, проверяет
-nginx и перечитывает сертификат. Отслеживать ошибки cron. Отдельный Docker
-socket в контейнеры не передаётся.
-
-### Подключение домена после проверки IP
+## Подключение домена и HTTPS после проверки IP
 
 Настроить A-запись `bks-lab.ru` на `91.218.114.82`; после её обновления
 выпустить доменный сертификат. Работающий nginx обслуживает ACME challenge
@@ -134,9 +120,11 @@ socket в контейнеры не передаётся.
 docker compose --env-file backend/.env.production -f docker-compose.yml run --rm certbot certonly --webroot --webroot-path /var/www/certbot --domain bks-lab.ru --email YOUR_CERTIFICATE_EMAIL --agree-tos --no-eff-email
 ```
 
+Заменить `YOUR_CERTIFICATE_EMAIL` адресом владельца сертификата.
 Затем установить `SITE_HOST=bks-lab.ru` в обоих env-файлах,
 `SITE_URL=https://bks-lab.ru` во frontend и
-`ADMIN_ALLOWED_ORIGINS=["https://bks-lab.ru"]` в backend. Пересобрать frontend без кеша
+`ADMIN_ALLOWED_ORIGINS=["https://bks-lab.ru"]`, `ADMIN_COOKIE_SECURE=true`,
+`NGINX_TEMPLATE_DIR=./infra/nginx/https` в backend. Пересобрать frontend без кеша
 и пересоздать backend, чтобы применился новый разрешённый Origin:
 
 ```bash
@@ -146,15 +134,20 @@ docker compose --env-file backend/.env.production -f docker-compose.yml up -d --
 docker compose --env-file backend/.env.production -f docker-compose.yml exec -T nginx nginx -t
 ```
 
-При ошибке выпуска доменного сертификата сохранить рабочий IP-стенд и
+После подключения HTTPS добавить в cron на сервере запуск
+`bash /absolute/path/bks-lab/scripts/renew-certificates.sh` дважды в сутки.
+Скрипт проверяет срок сертификата через certbot, проверяет nginx и
+перечитывает сертификат. Отслеживать ошибки cron.
+
+При ошибке выпуска доменного сертификата сохранить рабочий HTTP-стенд по IP и
 его `SITE_HOST`, исправить DNS/доступность challenge и повторить выпуск.
 Не менять конфигурацию на домен до появления его сертификата.
 
 ## Проверка запуска
 
 - `docker compose ... ps`: db/backend/news-analyzer-scheduler/frontend/nginx healthy.
-- `https://91.218.114.82/api/health` на первом стенде, затем
-  `https://bks-lab.ru/api/health`: 200; HTTP перенаправляет на HTTPS.
+- `http://91.218.114.82/api/health` на первом стенде: 200. После подключения
+  домена — `https://bks-lab.ru/api/health`: 200, HTTP перенаправляет на HTTPS.
 - Главная, пустые списки блога/заметок/проектов и `/sitemap.xml` открываются
   без ошибок и используют боевой домен. После создания материала в админке
   его страница и sitemap обновляются без пересборки frontend.
@@ -162,12 +155,13 @@ docker compose --env-file backend/.env.production -f docker-compose.yml exec -T 
   с `Cache-Control: no-store`. После входа работают статистика и редактор:
   создание материала, загрузка изображения, сохранение и предпросмотр;
   после выхода прежняя сессия недействительна.
-- Cookie `admin_session`: HttpOnly, Secure, SameSite=Strict, Path=/.
+- Cookie `admin_session`: HttpOnly, SameSite=Strict, Path=/; Secure при HTTPS.
   Path нужен для серверной проверки страниц `/admin`; JS токен не читает.
 - Обращение из формы появляется в `/admin/feedback` с именем, контактом для
   ответа, полным текстом и датой. Подписка появляется в разделе подписчиков.
 
-Admin POST принимает только Origin `https://SITE_HOST`. Публичный вход —
+Admin POST принимает только Origin из `ADMIN_ALLOWED_ORIGINS`, совпадающий
+с `SITE_URL`: HTTP на первом стенде, HTTPS после подключения домена. Публичный вход —
 nginx: он заменяет входящие `X-Real-IP` и `X-Forwarded-For` адресом посетителя.
 Backend использует `X-Real-IP` для статистики и лимитов; его порт наружу
 не публикуется. Сеть Docker — обычная `bridge` с автоматическими адресами;

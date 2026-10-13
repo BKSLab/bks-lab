@@ -84,7 +84,8 @@ metadata/OG/sitemap самого сайта и собственный редак
   Источники, анализы и решения находятся в БД отдельно от таблиц контента
   публикаций.
 - **Инфраструктура:** Docker Compose: dev — db/backend/scheduler; prod
-  дополнительно frontend/nginx/certbot. Один nginx для TLS и reverse proxy.
+  дополнительно frontend/nginx. Первый стенд по IP использует HTTP без
+  сертификата; HTTPS и certbot — при подключении домена. Один nginx для reverse proxy.
   Production env — `backend/.env.production`; dev env — `backend/.env.dev`.
   Нет Celery, Redis/RabbitMQ и второго nginx; PostgreSQL-очередь News Analyzer
   является согласованной частью проекта. У scheduler нет публичного порта.

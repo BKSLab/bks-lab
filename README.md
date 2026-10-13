@@ -35,8 +35,9 @@
 - **News Analyzer:** RSS/Atom и HTML, внешняя LLM, очередь в PostgreSQL,
   APScheduler в отдельном процессе `news-analyzer-scheduler`.
 - **Инфраструктура:** Docker + Compose (dev: `db`, `backend`,
-  `news-analyzer-scheduler`; prod дополнительно frontend, nginx с TLS,
-  certbot). Production env — `backend/.env.production`, dev env —
+  `news-analyzer-scheduler`; prod дополнительно frontend и nginx:
+  первый стенд по IP — HTTP, HTTPS/certbot — при подключении домена).
+  Production env — `backend/.env.production`, dev env —
   `backend/.env.dev`. Новых открытых портов для News Analyzer нет.
 
 Документация: `docs/architecture.md`, `docs/api_contract.md`,
@@ -120,7 +121,8 @@ scripts/     конфигурация prod, backup (БД + uploads), обнов�
 `ADMIN_COOKIE_SECURE=false`, затем пересоздать backend командой
 `docker compose -f docker-compose.dev.yml up -d --force-recreate backend`. Если открываете сайт через
 `127.0.0.1`, добавить этот origin в массив. Войти на `/admin/login`.
-В production cookie всегда Secure; не переносить локальное значение `false`.
+На первом стенде по IP используется HTTP и `ADMIN_COOKIE_SECURE=false`;
+при переходе на HTTPS установить `true` и согласовать Origin с URL сайта.
 Админка показывает статистику, материалы, подписчиков и обращения; публикации
 создаются и редактируются в редакторе `/admin/content` (хранилище —
 PostgreSQL, история версий сохраняется). Редакционный центр `/admin/news`
