@@ -525,7 +525,7 @@ class ItemsListSchema(BaseModel):
 
 ## 16. Инфраструктура и запуск
 
-- `Dockerfile` + `docker-compose.yml` (dev) / `docker-compose.prod.yml` (production) + `entrypoint.sh` — готовность БД контролируется Compose healthcheck, entrypoint выполняет миграции и seed перед стартом ASGI-сервера. При прямом запуске Python-процессов миграции и seed выполняются вручную; приложение само не запускает их из кода.
+- `Dockerfile` + `docker-compose.yml` (production) / `docker-compose.dev.yml` (dev) + `entrypoint.sh` — готовность БД контролируется Compose healthcheck, entrypoint выполняет миграции и seed перед стартом ASGI-сервера. При прямом запуске Python-процессов миграции и seed выполняются вручную; приложение само не запускает их из кода.
 - ASGI-сервер — Hypercorn/Uvicorn, конфигурация таймаутов (keep-alive, graceful timeout) синхронизирована по всей цепочке: nginx → ASGI-сервер → httpx-клиенты → таймауты LLM/внешних API. Рассинхронизация таймаутов на разных уровнях цепочки — частый источник трудноуловимых 504/502 под нагрузкой; при изменении таймаута на одном уровне нужно явно пересчитать соседние.
 - `.env` / `.env.example` — `.env.example` всегда поддерживается актуальным (все переменные, которые есть в `Settings`, должны быть отражены), чтобы развернуть проект с нуля можно было без чтения кода настроек.
 

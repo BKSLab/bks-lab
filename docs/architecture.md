@@ -563,12 +563,12 @@ frontend/
 
 ## 5. Инфраструктура
 
-`docker-compose.yml` используется для локальной разработки: PostgreSQL,
+`docker-compose.dev.yml` используется для локальной разработки: PostgreSQL,
 backend с `--reload` и отдельный scheduler; Next.js запускается локально.
-`docker-compose.prod.yml` содержит полный production-стек:
+Основной `docker-compose.yml` содержит полный production-стек:
 
 ```text
-docker-compose.prod.yml
+docker-compose.yml
   db         # postgres:16-alpine, healthcheck pg_isready, volume pg_data
   backend    # FastAPI + hypercorn, entrypoint: migrations + seed_news + старт,
              # volume: uploads (изображения); env из backend/.env.production
@@ -584,10 +584,7 @@ docker-compose.prod.yml
 ```yaml
 db:
   image: postgres:16-alpine
-  environment:
-    POSTGRES_USER: ${POSTGRES_USER:-bkslab}
-    POSTGRES_DB: ${POSTGRES_DB:-bkslab}
-    POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+  env_file: ./backend/.env.production
   restart: unless-stopped
   volumes:
     - pg_data:/var/lib/postgresql/data
@@ -617,8 +614,8 @@ db:
 - Публикации хранятся в PostgreSQL, изображения — в volume `uploads`.
   Сохранение в админке вызывает `/api/revalidate` фронтенда (§4).
 - Production-команды явно задают
-  `--env-file backend/.env.production -f docker-compose.prod.yml`.
-- Dev-режим: `docker compose up db backend news-analyzer-scheduler` и
+  `--env-file backend/.env.production -f docker-compose.yml`.
+- Dev-режим: `docker compose -f docker-compose.dev.yml up db backend news-analyzer-scheduler` и
   локальный `next dev`; в dev
   `next.config.ts` содержит rewrites `/api/* → http://localhost:8000`
   (CORS не нужен и локально; Admin API доступен на том же origin).

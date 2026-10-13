@@ -121,8 +121,8 @@ LLM; авторизация и Origin для всех API; реальные UI-�
 production-контейнеров:
 
 ```bash
-docker compose --env-file backend/.env.production -f docker-compose.prod.yml ps
-docker compose --env-file backend/.env.production -f docker-compose.prod.yml logs --tail 50 news-analyzer-scheduler
+docker compose --env-file backend/.env.production -f docker-compose.yml ps
+docker compose --env-file backend/.env.production -f docker-compose.yml logs --tail 50 news-analyzer-scheduler
 ```
 
 Во вкладке «Каталог» (`/admin/news/sources/catalogue`) доступны **все 98

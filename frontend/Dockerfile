@@ -9,19 +9,11 @@ WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1
 COPY --from=dependencies /app/node_modules ./node_modules
 COPY . .
-ARG SITE_URL=https://bks-lab.ru
-ARG CONTACT_EMAIL=
-ARG NEXT_PUBLIC_ADS_ENABLED=false
-ARG NEXT_PUBLIC_YANDEX_AD_SIDEBAR_ID=
-ARG NEXT_PUBLIC_YANDEX_AD_ARTICLE_ID=
-ARG NEXT_PUBLIC_YANDEX_AD_NOTES_ID=
-ENV SITE_URL=$SITE_URL CONTACT_EMAIL=$CONTACT_EMAIL
-ENV NEXT_PUBLIC_ADS_ENABLED=$NEXT_PUBLIC_ADS_ENABLED
-ENV NEXT_PUBLIC_YANDEX_AD_SIDEBAR_ID=$NEXT_PUBLIC_YANDEX_AD_SIDEBAR_ID
-ENV NEXT_PUBLIC_YANDEX_AD_ARTICLE_ID=$NEXT_PUBLIC_YANDEX_AD_ARTICLE_ID
-ENV NEXT_PUBLIC_YANDEX_AD_NOTES_ID=$NEXT_PUBLIC_YANDEX_AD_NOTES_ID
-# The image is built independently of running application services.
-RUN API_INTERNAL_URL=http://127.0.0.1:9 API_PROXY_URL=http://backend:8000 npm run build -- --webpack
+# Supply the frontend env during the build without copying it into image layers.
+# Next.js traces env files into standalone output; remove that copy in this step.
+RUN --mount=type=secret,id=frontend_env,target=/app/.env.production,required=true \
+    API_INTERNAL_URL=http://127.0.0.1:9 API_PROXY_URL=http://backend:8000 npm run build -- --webpack \
+    && rm -f .next/standalone/.env.production
 
 FROM node:24-alpine AS runner
 WORKDIR /app

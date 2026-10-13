@@ -1,7 +1,7 @@
 # Развёртывание BKS Lab
 
-Production-конфигурация находится в `docker-compose.prod.yml`. Она отдельна
-от локального `docker-compose.yml`: БД и приложения не публикуют порты,
+Production-конфигурация находится в `docker-compose.yml`. Она отдельна
+от локального `docker-compose.dev.yml`: БД и приложения не публикуют порты,
 снаружи доступны только nginx 80/443. Backend и frontend работают от UID 1001.
 Контент хранится в PostgreSQL и редактируется через админку; загруженные
 изображения — в именованном volume `uploads` (раздаёт nginx). PostgreSQL,
@@ -27,7 +27,8 @@ HTTPS-окружении; серверная приёмка ещё не пров
 
 ```bash
 python3 scripts/init-production-env.py
-chmod 600 backend/.env.production
+cp frontend/.env.production.example frontend/.env.production
+chmod 600 backend/.env.production frontend/.env.production
 ```
 
 Скрипт не перезаписывает существующий файл и не выводит секреты. Он создаёт
@@ -35,7 +36,12 @@ chmod 600 backend/.env.production
 редакторе заполнить `backend/.env.production`: `SITE_HOST` (hostname или IPv4 без схемы/порта),
 `CONTACT_EMAIL`, `SMTP_HOST`, порт, логин/пароль, `SMTP_SENDER`,
 `SMTP_RECIPIENT`. Логин админки — `ADMIN_USERNAME`; пароль — `ADMIN_PASSWORD`.
-Файл не хранить в git и не прикладывать к отчётам.
+В `frontend/.env.production` задать тот же `SITE_HOST`,
+`SITE_URL=https://SITE_HOST`, публичный `CONTACT_EMAIL` и тот же
+`REVALIDATE_SECRET`, что у backend. Этот файл используется frontend и nginx;
+backend и БД, как в референсах, получают `backend/.env.production`.
+В backend-файле также согласовать `ADMIN_ALLOWED_ORIGINS` с `SITE_URL`.
+Env-файлы не хранить в git и не прикладывать к отчётам.
 
 Для порта 587 обычно нужны `SMTP_START_TLS=true`, `SMTP_USE_TLS=false`;
 для implicit TLS на 465 — наоборот. Сверить с настройками своего провайдера.
@@ -43,16 +49,19 @@ chmod 600 backend/.env.production
 почты и не сообщает об успешной отправке. Подписка сохраняет email;
 автоматическая рассылка не входит в текущую реализацию.
 
-`SITE_HOST`, `CONTACT_EMAIL`, рекламные `NEXT_PUBLIC_*` используются во
-время сборки: после их изменения пересобрать frontend. Изменение остальных
+`SITE_URL`, `CONTACT_EMAIL`, рекламные `NEXT_PUBLIC_*` из frontend-файла
+используются при сборке через BuildKit secret. После их изменения выполнить
+`docker compose --env-file backend/.env.production -f docker-compose.yml build --no-cache frontend`
+и пересоздать frontend: содержимое secrets не меняет Docker build cache.
+Приватный env-файл не сохраняется в образе. Изменение остальных
 секретов требует пересоздания соответствующего контейнера. Для смены пароля
 у уже созданной БД недостаточно поменять env: использовать PostgreSQL
 `ALTER ROLE` и согласованно обновить конфигурацию приложения.
 
 ```bash
-docker compose --env-file backend/.env.production -f docker-compose.prod.yml config --quiet
-docker compose --env-file backend/.env.production -f docker-compose.prod.yml build
-docker compose --env-file backend/.env.production -f docker-compose.prod.yml up -d --wait db backend news-analyzer-scheduler frontend
+docker compose --env-file backend/.env.production -f docker-compose.yml config --quiet
+docker compose --env-file backend/.env.production -f docker-compose.yml build
+docker compose --env-file backend/.env.production -f docker-compose.yml up -d --wait db backend news-analyzer-scheduler frontend
 ```
 
 Frontend собирается без живого API. Пустые списки допустимы только при
@@ -77,7 +86,7 @@ News Analyzer требует отдельного scheduler из того же b
 Для отдельного повторного запуска seed можно выполнить:
 
 ```bash
-docker compose --env-file backend/.env.production -f docker-compose.prod.yml exec -T backend python -m scripts.seed_news
+docker compose --env-file backend/.env.production -f docker-compose.yml exec -T backend python -m scripts.seed_news
 ```
 
 Конфигурация — в `.env.production.example`, подробности — в
@@ -87,7 +96,8 @@ docker compose --env-file backend/.env.production -f docker-compose.prod.yml exe
 
 Для первого стенда установить `SITE_HOST=91.218.114.82` в
 `backend/.env.production` до сборки frontend. Админка использует HTTPS и Secure
-cookie на обоих этапах; разрешённый Origin формируется из `SITE_HOST`.
+cookie на обоих этапах; `ADMIN_ALLOWED_ORIGINS` в backend-файле должен
+соответствовать `SITE_URL` во frontend-файле.
 
 ### Первый стенд по IP
 
@@ -95,10 +105,10 @@ cookie на обоих этапах; разрешённый Origin формир�
 В этом режиме приложение по HTTP не отдаётся.
 
 ```bash
-NGINX_TEMPLATE_DIR=./infra/nginx/http docker compose --env-file backend/.env.production -f docker-compose.prod.yml up -d nginx
-docker compose --env-file backend/.env.production -f docker-compose.prod.yml run --rm certbot certonly --webroot --webroot-path /var/www/certbot --preferred-profile shortlived --ip-address 91.218.114.82 --cert-name 91.218.114.82 --email YOUR_CERTIFICATE_EMAIL --agree-tos --no-eff-email
-docker compose --env-file backend/.env.production -f docker-compose.prod.yml up -d --force-recreate nginx
-docker compose --env-file backend/.env.production -f docker-compose.prod.yml exec -T nginx nginx -t
+NGINX_TEMPLATE_DIR=./infra/nginx/http docker compose --env-file backend/.env.production -f docker-compose.yml up -d nginx
+docker compose --env-file backend/.env.production -f docker-compose.yml run --rm certbot certonly --webroot --webroot-path /var/www/certbot --preferred-profile shortlived --ip-address 91.218.114.82 --cert-name 91.218.114.82 --email YOUR_CERTIFICATE_EMAIL --agree-tos --no-eff-email
+docker compose --env-file backend/.env.production -f docker-compose.yml up -d --force-recreate nginx
+docker compose --env-file backend/.env.production -f docker-compose.yml exec -T nginx nginx -t
 ```
 
 Заменить `YOUR_CERTIFICATE_EMAIL` адресом владельца сертификата.
@@ -123,16 +133,19 @@ socket в контейнеры не передаётся.
 на порту 80:
 
 ```bash
-docker compose --env-file backend/.env.production -f docker-compose.prod.yml run --rm certbot certonly --webroot --webroot-path /var/www/certbot --domain bks-lab.ru --email YOUR_CERTIFICATE_EMAIL --agree-tos --no-eff-email
+docker compose --env-file backend/.env.production -f docker-compose.yml run --rm certbot certonly --webroot --webroot-path /var/www/certbot --domain bks-lab.ru --email YOUR_CERTIFICATE_EMAIL --agree-tos --no-eff-email
 ```
 
-Затем установить `SITE_HOST=bks-lab.ru` в `backend/.env.production`, пересобрать
-frontend и пересоздать backend, чтобы применился новый разрешённый Origin:
+Затем установить `SITE_HOST=bks-lab.ru` в обоих env-файлах,
+`SITE_URL=https://bks-lab.ru` во frontend и
+`ADMIN_ALLOWED_ORIGINS=["https://bks-lab.ru"]` в backend. Пересобрать frontend без кеша
+и пересоздать backend, чтобы применился новый разрешённый Origin:
 
 ```bash
-docker compose --env-file backend/.env.production -f docker-compose.prod.yml up -d --build --wait backend news-analyzer-scheduler frontend
-docker compose --env-file backend/.env.production -f docker-compose.prod.yml up -d --force-recreate nginx
-docker compose --env-file backend/.env.production -f docker-compose.prod.yml exec -T nginx nginx -t
+docker compose --env-file backend/.env.production -f docker-compose.yml build --no-cache frontend
+docker compose --env-file backend/.env.production -f docker-compose.yml up -d --build --wait backend news-analyzer-scheduler frontend
+docker compose --env-file backend/.env.production -f docker-compose.yml up -d --force-recreate nginx
+docker compose --env-file backend/.env.production -f docker-compose.yml exec -T nginx nginx -t
 ```
 
 При ошибке выпуска доменного сертификата сохранить рабочий IP-стенд и
@@ -159,7 +172,8 @@ docker compose --env-file backend/.env.production -f docker-compose.prod.yml exe
 Admin POST принимает только Origin `https://SITE_HOST`. Backend доверяет
 IP-заголовкам только от фиксированного IP nginx; входящая пользовательская
 цепочка X-Forwarded-For заменяется. Если заданная Docker-подсеть конфликтует
-с сетью сервера, поменять `BKS_NETWORK_SUBNET` и `BKS_PROXY_IP` вместе.
+с сетью сервера, поменять `BKS_NETWORK_SUBNET`, `BKS_PROXY_IP` и
+`APP_TRUSTED_PROXIES` вместе.
 
 Заголовки безопасности устанавливает nginx. CSP пока `Report-Only`:
 проверить отчёты браузера с рабочими сценариями, затем перейти к enforced
@@ -184,8 +198,8 @@ Authorization, не попадает в URL); страницы и sitemap обн
 ```bash
 bash scripts/backup-database.sh
 git pull --ff-only
-docker compose --env-file backend/.env.production -f docker-compose.prod.yml up -d --build --wait db backend news-analyzer-scheduler frontend
-docker compose --env-file backend/.env.production -f docker-compose.prod.yml up -d --force-recreate nginx
+docker compose --env-file backend/.env.production -f docker-compose.yml up -d --build --wait db backend news-analyzer-scheduler frontend
+docker compose --env-file backend/.env.production -f docker-compose.yml up -d --force-recreate nginx
 ```
 
 При откате сначала оценить совместимость миграций с прежним кодом. Не

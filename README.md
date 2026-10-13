@@ -56,8 +56,8 @@ frontend/   Next.js: публичная часть, админка, дизайн
 docs/       архитектура, контракт API, формат контента, план реализации
 search_news/  ТЗ News Analyzer и исследовательский каталог источников
 референсы/  исходные визуальные материалы
-docker-compose.yml  dev: db (PostgreSQL 16), backend, news-analyzer-scheduler
-docker-compose.prod.yml  production-окружение с HTTPS
+docker-compose.yml  production: db/backend/scheduler/frontend/nginx/certbot
+docker-compose.dev.yml  локальная разработка: db/backend/scheduler
 infra/nginx/  шаблоны nginx для выпуска сертификата и HTTPS
 scripts/     конфигурация prod, backup (БД + uploads), обновление TLS
 ```
@@ -80,14 +80,14 @@ scripts/     конфигурация prod, backup (БД + uploads), обнов�
 2. Поднять БД, бэкенд и фоновый обработчик в Docker:
 
    ```bash
-   docker compose up -d --build db backend news-analyzer-scheduler
+   docker compose -f docker-compose.dev.yml up -d --build db backend news-analyzer-scheduler
    curl http://localhost:8000/api/health   # {"status":"ok"}
    ```
 
    PostgreSQL доступен с хоста на порту 5434 (для IDE). Код бэкенда
    смонтирован в контейнер: HTTP-сервер подхватывает правки через `--reload`.
    После изменения кода фонового обработчика перезапустите
-   `docker compose restart news-analyzer-scheduler`; после изменения env
+   `docker compose -f docker-compose.dev.yml restart news-analyzer-scheduler`; после изменения env
    пересоздайте контейнеры.
 
    Локальный запуск бэкенда без Docker (против Docker-БД):
@@ -118,7 +118,7 @@ scripts/     конфигурация prod, backup (БД + uploads), обнов�
 Для локальной админки задать в `backend/.env` собственные `ADMIN_USERNAME`
 и `ADMIN_PASSWORD`, `ADMIN_ALLOWED_ORIGINS=["http://localhost:3000"]`,
 `ADMIN_COOKIE_SECURE=false`, затем пересоздать backend командой
-`docker compose up -d --force-recreate backend`. Если открываете сайт через
+`docker compose -f docker-compose.dev.yml up -d --force-recreate backend`. Если открываете сайт через
 `127.0.0.1`, добавить этот origin в массив. Войти на `/admin/login`.
 В production cookie всегда Secure; не переносить локальное значение `false`.
 Админка показывает статистику, материалы и подписчиков; публикации
@@ -149,7 +149,7 @@ HTTP-порт. Seed заполняет каталог подсказок ист�
 если новых записей нет, seed ничего не записывает. Повторный запуск вручную:
 
 ```bash
-docker compose exec backend python -m scripts.seed_news
+docker compose -f docker-compose.dev.yml exec backend python -m scripts.seed_news
 ```
 
 При локальном backend без Docker выполните `python -m scripts.seed_news`
@@ -175,7 +175,7 @@ NEWS_LLM_MODEL=qwen/qwen3-30b-a3b-instruct-2507
 После изменения env пересоздайте оба процесса:
 
 ```bash
-docker compose up -d --force-recreate backend news-analyzer-scheduler
+docker compose -f docker-compose.dev.yml up -d --force-recreate backend news-analyzer-scheduler
 ```
 
 Ключ не передаётся фронтенду; в настройках видны только наличие конфигурации,

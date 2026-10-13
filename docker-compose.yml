@@ -1,42 +1,44 @@
-# Общие настройки процессов из backend-образа (backend API и scheduler).
-# Значения БД берутся из backend/.env: в Docker это db:5432 (см. .env.example),
-# локальный запуск без Docker переопределяет их переменными в командной строке.
+name: bks-lab-prod
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 x-backend-runtime: &backend-runtime
   build: ./backend
-  image: bks-lab-backend:dev
-  env_file: ./backend/.env
-  volumes:
-    - ./backend:/app
-    - /app/.venv
-  networks: [bks-lab]
+  image: bks-lab-backend:prod
+  env_file: ./backend/.env.production
+  restart: unless-stopped
+  read_only: true
+  tmpfs: [/tmp]
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  networks: [app]
+  logging: *logging
 
 services:
-
-  # ── База данных ──────────────────────────────────────────────────────────
   db:
     image: postgres:16-alpine
-    env_file: ./backend/.env
-    restart: always
-    ports:
-      - "5434:5432"
+    env_file: ./backend/.env.production
+    restart: unless-stopped
     volumes:
       - pg_data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 10s
       timeout: 5s
-      retries: 5
-    networks: [bks-lab]
+      retries: 10
+    networks: [app]
+    logging: *logging
 
-  # ── Backend (FastAPI, код смонтирован, автоперезагрузка) ─────────────────
   backend:
     <<: *backend-runtime
+    volumes:
+      - uploads:/app/uploads
     depends_on:
-      db:
-        condition: service_healthy
-    ports:
-      - "8000:8000"
-    command: ["hypercorn", "main:app", "--bind", "0.0.0.0:8000", "--reload"]
+      db: {condition: service_healthy}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=4)"]
       interval: 15s
@@ -44,11 +46,9 @@ services:
       start_period: 30s
       retries: 10
 
-  # ── News Analyzer: фоновый обработчик из того же backend-образа ──────────
   news-analyzer-scheduler:
     <<: *backend-runtime
-    restart: unless-stopped
-    # Only the API entrypoint migrates; its healthcheck gates worker startup.
+    # The healthy API has already applied migrations and seeded the catalogue.
     entrypoint: ["python", "-m", "src.background_tasks.news_scheduler"]
     command: []
     depends_on:
@@ -61,8 +61,73 @@ services:
       start_period: 30s
       retries: 3
 
+  frontend:
+    build:
+      context: ./frontend
+      secrets: [frontend_env]
+    image: bks-lab-frontend:prod
+    env_file: ./frontend/.env.production
+    restart: unless-stopped
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    # Next.js writes its ISR cache; the application runs as UID 1001.
+    depends_on:
+      backend: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/admin/login').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 10s
+      start_period: 30s
+      retries: 10
+    networks: [app]
+    logging: *logging
+
+  nginx:
+    image: nginx:1.28-alpine
+    env_file: ./frontend/.env.production
+    restart: unless-stopped
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+    volumes:
+      - ${NGINX_TEMPLATE_DIR:-./infra/nginx/https}:/etc/nginx/templates:ro
+      - ./infra/nginx/common:/etc/nginx/snippets:ro
+      - certificates:/etc/letsencrypt:ro
+      - acme:/var/www/certbot:ro
+      - uploads:/var/www/bks-lab-uploads:ro
+    depends_on:
+      frontend: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/nginx-health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    networks:
+      app:
+        ipv4_address: ${BKS_PROXY_IP:-172.30.55.10}
+    logging: *logging
+
+  certbot:
+    image: certbot/certbot:v5.4.0
+    profiles: [tools]
+    volumes:
+      - certificates:/etc/letsencrypt
+      - acme:/var/www/certbot
+    networks: [app]
+    logging: *logging
+
+secrets:
+  frontend_env:
+    file: ./frontend/.env.production
+
 volumes:
   pg_data:
+  uploads:
+  certificates:
+  acme:
 
 networks:
-  bks-lab:
+  app:
+    ipam:
+      config:
+        - subnet: ${BKS_NETWORK_SUBNET:-172.30.55.0/24}
