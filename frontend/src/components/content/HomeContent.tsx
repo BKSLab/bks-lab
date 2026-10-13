@@ -39,7 +39,7 @@ export async function HomeContent() {
   const [projects, articles, notes] = await Promise.all([
     getProjects({ featured: true }),
     getLatestArticles(3),
-    getLatestNotes(3),
+    getLatestNotes(5),
   ]);
   return (
     <>
@@ -59,13 +59,9 @@ export async function HomeContent() {
             <div className="hero-copy">
               <p className="eyebrow mb-6">РАЗРАБОТКА · ПРОЕКТЫ · ИДЕИ</p>
               <h1 id="home-title" className="home-title">
-                Технологии для более{" "}
-                <span className="text-accent">открытого мира</span>
-              </h1>
-              <p className="mt-6 max-w-prose text-lg text-text-muted">
                 Разработка. Управление. Искусственный интеллект. Идеи, которые
                 работают.
-              </p>
+              </h1>
               <div className="mt-8 flex flex-wrap gap-3">
                 <Link href="/projects" className="button-primary">
                   Мои проекты <ArrowRightIcon className="h-4 w-4" />
@@ -74,9 +70,6 @@ export async function HomeContent() {
                   Читать блог
                 </Link>
               </div>
-              <p aria-hidden="true" className="hero-signature">
-                TECHNOLOGY FOR A MORE OPEN WORLD
-              </p>
             </div>
           </Container>
         </section>
@@ -102,52 +95,53 @@ export async function HomeContent() {
           </section>
         </Container>
       </div>
-      <Container>
-        <section className="section-space">
-          <SectionHeading
-            title="Мои проекты"
-            href="/projects"
-            linkText="Все проекты"
-          />
-          <div className="card-grid">
-            {projects.map((project) => (
-              <ProjectCard key={project.slug} project={project} />
-            ))}
-          </div>
-          {!projects.length && (
-            <p className="empty-state">Проекты скоро появятся.</p>
-          )}
-        </section>
-        <section className="section-space border-t border-border">
-          <SectionHeading
-            title="Последние статьи"
-            href="/blog"
-            linkText="Все статьи"
-          />
-          <div className="card-grid">
-            {articles.map((article) => (
-              <ArticleCard key={article.slug} article={article} />
-            ))}
-          </div>
-          {!articles.length && (
-            <p className="empty-state">Статьи скоро появятся.</p>
-          )}
-        </section>
-        <section className="section-space border-t border-border">
-          <SectionHeading
-            title="Заметки на полях"
-            href="/notes"
-            linkText="Все заметки"
-          />
-          <div className="grid gap-x-8 md:grid-cols-2 desktop:grid-cols-3">
-            {notes.map((note) => (
-              <NotePreview key={note.slug} note={note} />
-            ))}
-          </div>
+      <Container className="home-columns">
+        <div className="home-main">
+          <section className="section-space">
+            <SectionHeading
+              title="Мои проекты"
+              href="/projects"
+              linkText="Все проекты"
+            />
+            <div className="card-grid">
+              {projects.map((project) => (
+                <ProjectCard key={project.slug} project={project} />
+              ))}
+            </div>
+            {!projects.length && (
+              <p className="empty-state">Проекты скоро появятся.</p>
+            )}
+          </section>
+          <section className="section-space border-t border-border">
+            <SectionHeading
+              title="Последние статьи"
+              href="/blog"
+              linkText="Все статьи"
+            />
+            <div className="card-grid">
+              {articles.map((article) => (
+                <ArticleCard key={article.slug} article={article} />
+              ))}
+            </div>
+            {!articles.length && (
+              <p className="empty-state">Статьи скоро появятся.</p>
+            )}
+          </section>
+        </div>
+        <aside aria-labelledby="home-notes-title" className="home-notes">
+          <h2 id="home-notes-title" className="mb-5 text-2xl font-bold">
+            Заметки на полях
+          </h2>
+          {notes.map((note) => (
+            <NotePreview key={note.slug} note={note} />
+          ))}
           {!notes.length && (
-            <p className="empty-state">Заметки скоро появятся.</p>
+            <p className="py-5 text-text-muted">Заметки скоро появятся.</p>
           )}
-        </section>
+          <Link href="/notes" className="text-link mt-3">
+            Все заметки <ArrowRightIcon className="h-4 w-4" />
+          </Link>
+        </aside>
       </Container>
       <section className="statement dark-panel">
         <Container>
