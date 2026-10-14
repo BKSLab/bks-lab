@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { AdminPagination } from "@/components/admin/AdminPagination";
-import { NewsItemCard } from "@/components/admin/news/NewsItemCard";
+import { NewsItemRow } from "@/components/admin/news/NewsItemRow";
 import { NewsShell } from "@/components/admin/news/NewsShell";
 import { adminFetch, requireAdmin } from "@/lib/admin-api";
 import { adminHref, adminPage, type AdminSearchParams } from "@/lib/admin-api/params";
@@ -44,7 +44,7 @@ export default async function NewsItemsPage({ searchParams }: { searchParams: Pr
       </form>
       {invalidPeriod && <p id="news-period-error" role="alert" className="admin-error">Начало периода должно быть раньше его окончания или совпадать с ним. Исправьте даты и примените фильтры.</p>}
       <p className="admin-muted">Найдено: {data.total}. Даты указаны в UTC.</p>
-      {data.items.length ? <div className="news-items">{data.items.map(item => <NewsItemCard key={`${item.id}-${filters.format}`} item={item} format={filters.format as NewsFormat || undefined} />)}</div>
+      {data.items.length ? <ul className="news-items" aria-label="Подобранные новости">{data.items.map(item => <li key={`${item.id}-${filters.format}`}><NewsItemRow item={item} format={filters.format as NewsFormat || undefined} /></li>)}</ul>
         : <div className="admin-empty news-stack"><p>{sources.length ? "Материалов по этим фильтрам пока нет. Сбросьте фильтры или запустите сбор." : "Добавьте первый источник и проверьте его, чтобы начать собирать материалы."}</p><Link className="admin-link" prefetch={false} href={sources.length ? "/admin/news/runs" : "/admin/news/sources/new"}>{sources.length ? "Перейти к запускам" : "Добавить источник"}</Link></div>}
       <AdminPagination path="/admin/news/items" page={data.page} total={data.total} pages={data.pages ?? Math.ceil(data.total / data.page_size)} params={filters} />
     </section>

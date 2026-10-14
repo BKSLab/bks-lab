@@ -10,7 +10,6 @@ const links = [
   { key: "referrers", href: "/admin/stats/referrers", label: "Источники" },
   { key: "content", href: "/admin/content", label: "Материалы" },
   { key: "news", href: "/admin/news", label: "Редакционный центр" },
-  { key: "plan", href: "/admin/news/plan", label: "План публикаций" },
   { key: "subscribers", href: "/admin/subscribers", label: "Подписчики" },
   { key: "feedback", href: "/admin/feedback", label: "Обратная связь" },
 ] as const;

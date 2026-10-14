@@ -1,6 +1,7 @@
 """Worker acceptance against PostgreSQL, with all external calls isolated."""
 
 import asyncio
+import json
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
@@ -17,8 +18,10 @@ from src.clients.news_http import NewsHttpResponse, SafeNewsHttpClient
 from src.background_tasks.news_scheduler import NewsScheduler, latest_scheduled_slot
 from src.clients.news_sources import NewsSourceClient
 from src.core.news_settings import NewsSettings
+from src.db.models.news_analyses import NewsAnalysis
 from src.db.models.news_items import NewsItem
 from src.db.models.news_jobs import NewsJob, NewsSourceRun
+from src.dependencies.news_clients import news_analysis_service
 from src.exceptions.llm import LlmApiRequestError
 from src.repositories.news_analyses import NewsAnalysisRepository
 from src.repositories.news_catalog import NewsCatalogRepository
@@ -30,6 +33,7 @@ from src.repositories.news_sources import NewsSourceRepository
 from src.schemas.news_collection import CollectedItem, CollectionResult, DiscoveryResult
 from src.services.news_analysis import NewsAnalysisService
 from src.services.news_pipeline import NewsPipeline, NewsRepositories
+from tests.news_helpers import analysis_data, collected
 
 
 @pytest.fixture
@@ -248,6 +252,93 @@ async def test_two_schedulers_and_restart_deduplicate_the_same_daily_slot(
         assert len(jobs) == 1
         assert jobs[0].dedupe_key == "scheduled:Europe/Samara:2026-10-08:14:00"
     assert is_healthy(worker_config.health_file, worker_config.health_max_age_seconds)
+
+
+@pytest.mark.asyncio
+async def test_four_analysis_requests_overlap_while_fifth_waits_for_a_free_worker(
+    worker_scope, worker_config, collector, session_factory, monkeypatch,
+):
+    config = NewsSettings(_env_file=None, **(worker_config.model_dump() | {"llm_concurrency": 4}))
+    source = await add_source(worker_scope)
+    observations = [collected(external_id=str(index), url=f"https://source.example/{index}") for index in range(5)]
+    async with worker_scope() as repositories:
+        await repositories.settings.set({"enabled": False})
+        item_ids = (await repositories.items.ingest(source.id, observations, {}))["item_ids"]
+        for item_id, observation in zip(item_ids, observations):
+            await repositories.jobs.enqueue("analyze", item_id=item_id, payload={"content_hash": observation["content_hash"]})
+
+    fourth_entered, fifth_entered = asyncio.Event(), asyncio.Event()
+    responses = asyncio.Semaphore(0)
+    active = peak = requests = 0
+    classification = {key: value for key, value in analysis_data().items() if key not in {"news_score", "article_score"}}
+
+    async def provider(request):
+        nonlocal active, peak, requests
+        assert not worker_scope.is_active()
+        requests += 1
+        active += 1
+        peak = max(peak, active)
+        if requests == 4:
+            fourth_entered.set()
+        elif requests == 5:
+            fifth_entered.set()
+        try:
+            await responses.acquire()
+            return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps(classification)}}]})
+        finally:
+            active -= 1
+
+    http_client = httpx.AsyncClient
+    configured_limits = []
+
+    def controlled_client(**kwargs):
+        configured_limits.append(kwargs["limits"])
+        return http_client(transport=httpx.MockTransport(provider), **kwargs)
+
+    monkeypatch.setattr("src.dependencies.news_clients.httpx.AsyncClient", controlled_client)
+
+    async def job_counts():
+        async with session_factory() as session:
+            return dict((await session.execute(
+                select(NewsJob.status, func.count()).where(NewsJob.kind == "analyze").group_by(NewsJob.status)
+            )).all())
+
+    async with news_analysis_service(config) as service:
+        pipeline = NewsPipeline(
+            repositories=worker_scope, collector=collector, analyzer=service, config=config,
+            utc_now=lambda: datetime.now(timezone.utc),
+        )
+        runner = NewsScheduler(
+            pipeline=pipeline, scheduler=AsyncIOScheduler(), config=config,
+            utc_now=lambda: datetime.now(timezone.utc),
+        )
+        try:
+            await runner.start()
+            await asyncio.wait_for(fourth_entered.wait(), timeout=5)
+            assert active == peak == requests == 4
+            assert not fifth_entered.is_set()
+            assert await job_counts() == {"queued": 1, "running": 4}
+
+            responses.release()
+            await asyncio.wait_for(fifth_entered.wait(), timeout=5)
+            assert active == peak == 4 and requests == 5
+            assert await job_counts() == {"completed": 1, "running": 4}
+            for _ in range(4):
+                responses.release()
+
+            async with asyncio.timeout(5):
+                while await job_counts() != {"completed": 5}:
+                    await asyncio.sleep(0.01)
+        finally:
+            for _ in range(5):
+                responses.release()
+            await runner.stop()
+
+    assert configured_limits[0].max_connections == configured_limits[0].max_keepalive_connections == 4
+    assert peak == 4 and requests == 5 and active == 0
+    async with session_factory() as session:
+        assert await session.scalar(select(func.count()).select_from(NewsAnalysis)) == 5
+        assert await session.scalar(select(func.count()).select_from(NewsItem).where(NewsItem.status == "analyzed")) == 5
 
 
 @pytest.mark.asyncio

@@ -164,21 +164,22 @@ async def test_analysis_identity_and_content_hash_prevent_stale_overwrite(db_ses
     assert len(await analyses.list_for_item(item_id)) == 1
 
 
-async def test_atomic_claim_applies_global_cap_across_workers(session_factory):
+@pytest.mark.parametrize("limit", [2, 4])
+async def test_atomic_claim_applies_global_cap_across_workers(session_factory, limit):
     async with session_factory() as session:
         repo = NewsJobRepository(session)
-        for _ in range(3):
+        for _ in range(limit + 1):
             await repo.enqueue("analyze")
 
     async def claim(owner):
         async with session_factory() as session:
             return await NewsJobRepository(session).claim(
-                owner, 120, 3, kinds=["analyze"], concurrency_limits={"analyze": 2}
+                owner, 120, 3, kinds=["analyze"], concurrency_limits={"analyze": limit}
             )
 
-    claimed = await asyncio.gather(*(claim(f"worker-{index}") for index in range(3)))
-    assert len([row for row in claimed if row is not None]) == 2
-    assert len({row.id for row in claimed if row is not None}) == 2
+    claimed = await asyncio.gather(*(claim(f"worker-{index}") for index in range(limit + 1)))
+    assert len([row for row in claimed if row is not None]) == limit
+    assert len({row.id for row in claimed if row is not None}) == limit
 
 
 async def test_manual_analysis_refreshes_same_identity_without_creating_a_duplicate(

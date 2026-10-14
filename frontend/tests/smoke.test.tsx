@@ -29,10 +29,12 @@ describe("home page", () => {
     expect(
       screen.getByRole("heading", {
         level: 1,
-        name: "Разработка. Управление. Искусственный интеллект. Идеи, которые работают.",
+        name: "Проверяю идеи на практике.",
       }),
     ).toBeTruthy();
     expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
+    expect(screen.getByText("Эксперименты с AI, собственные инструменты и новости технологий — с авторским разбором и выводами.")).toBeTruthy();
+    expect(screen.queryByText("РАЗРАБОТКА · ПРОЕКТЫ · ИДЕИ")).toBeNull();
     expect(
       screen.getByRole("link", { name: "Проект из API" }).getAttribute("href"),
     ).toBe("/projects/demo");

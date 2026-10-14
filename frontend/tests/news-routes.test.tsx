@@ -161,30 +161,82 @@ describe("protected editorial routes", () => {
     expect(screen.getByRole("link", { name: "Добавить источник" }).getAttribute("href")).toBe("/admin/news/sources/new");
   });
 
-  it("shows the empty publication plan and its selected navigation tabs", async () => {
+  it("keeps the publication plan inside the editorial navigation", async () => {
     const { container } = render(<AdminLayout>{await NewsPlanPage(emptyParams())}</AdminLayout>);
     expect(adminFetch).toHaveBeenCalledWith("/news/items?decision=in_work&page=1&page_size=20");
     expect(screen.getByText(/План пока пуст/)).toBeTruthy();
     expect(screen.getByRole("link", { name: "Выбрать материалы из подборок" }).getAttribute("href")).toBe("/admin/news/items");
-    for (const name of ["Разделы панели", "Редакционный центр"]) {
-      expect(within(screen.getByRole("navigation", { name })).getByRole("link", { name: "План публикаций" }).getAttribute("aria-current")).toBe("page");
-    }
+    const panelNavigation = within(screen.getByRole("navigation", { name: "Разделы панели" }));
+    expect(panelNavigation.queryByRole("link", { name: "План публикаций" })).toBeNull();
+    expect(panelNavigation.getByRole("link", { name: "Редакционный центр" }).getAttribute("aria-current")).toBe("page");
+    const editorialNavigation = within(screen.getByRole("navigation", { name: "Редакционный центр" }));
+    expect(editorialNavigation.getByRole("link", { name: "План публикаций" }).getAttribute("aria-current")).toBe("page");
     expect(screen.getAllByRole("main")).toHaveLength(1);
     expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
     expect((await axe(container)).violations).toEqual([]);
   });
 
-  it("shows the saved summary, source, chosen format and notes in the plan", async () => {
+  it("renders a publication list with the saved summary, source, ratings, format and notes", async () => {
     vi.mocked(adminFetch).mockResolvedValue({ ...paged, items: [{ ...newsItem, decision: newsDecision }], total: 1 });
     const { container } = render(<AdminLayout>{await NewsPlanPage(emptyParams())}</AdminLayout>);
-    const card = within(screen.getByRole("article", { name: newsItem.title }));
-    expect(card.getByText(newsAnalysis.summary_ru)).toBeTruthy();
-    expect(card.getByText(newsDecision.comment, { selector: "p" })).toBeTruthy();
-    expect(card.getByText("Назначение в плане:").parentElement?.textContent).toContain("Короткая новость");
-    expect(card.getByRole("link", { name: /^Первоисточник/ }).getAttribute("href")).toBe(newsItem.url);
-    expect(card.getByRole("link", { name: newsItem.title }).getAttribute("href")).toBe("/admin/news/items/4");
-    expect(card.queryByRole("button", { name: "Добавить в план" })).toBeNull();
-    expect(card.getByRole("button", { name: "Убрать из плана" })).toBeTruthy();
+    const list = screen.getByRole("list", { name: "План публикаций" });
+    expect(list.tagName).toBe("UL");
+    const entries = within(list).getAllByRole("listitem");
+    expect(entries).toHaveLength(1);
+    expect(entries[0].parentElement).toBe(list);
+    const row = within(within(entries[0]).getByRole("article", { name: newsItem.title }));
+    expect(row.getByText(newsAnalysis.summary_ru)).toBeTruthy();
+    expect(row.getByText(newsAnalysis.editorial_comment_ru, { exact: false })).toBeTruthy();
+    expect(row.getByText(newsDecision.comment, { selector: "p" })).toBeTruthy();
+    expect(row.getByText(`${newsItem.source_name} · 08.10.2026`)).toBeTruthy();
+    expect(row.getByText("Анализ готов")).toBeTruthy();
+    expect(row.getByText("Для статьи", { selector: "dt" }).nextElementSibling?.textContent).toContain("86.0");
+    expect(row.getByText("Короткая новость", { selector: "dt" }).nextElementSibling?.textContent).toContain("82.0");
+    expect(row.getByText("Назначение в плане:").parentElement?.textContent).toContain("Короткая новость");
+    expect(row.getByRole("link", { name: /^Первоисточник/ }).getAttribute("href")).toBe(newsItem.url);
+    expect(row.getByRole("link", { name: newsItem.title }).getAttribute("href")).toBe("/admin/news/items/4");
+    expect(row.queryByRole("button", { name: "Добавить в план" })).toBeNull();
+    expect(row.getByRole("button", { name: "Убрать из плана" })).toBeTruthy();
+    fireEvent.click(row.getByText("Редакторское решение", { selector: "summary" }));
+    expect(row.getByRole("button", { name: "Сохранить изменения в плане" })).toBeTruthy();
+    expect(row.getByRole("button", { name: "Отклонить" })).toBeTruthy();
+    expect((row.getByLabelText("Комментарий редактора") as HTMLTextAreaElement).value).toBe(newsDecision.comment);
+    expect((await axe(container)).violations).toEqual([]);
+  });
+
+  it("renders news as list rows without losing full analysis, excerpt or editorial actions", async () => {
+    const summary = "Полная выжимка исследования. ".repeat(12);
+    vi.mocked(adminFetch).mockImplementation(async path => path.startsWith("/news/items?") ? {
+      ...paged, total: 2, items: [
+        { ...newsItem, analysis: { ...newsAnalysis, summary_ru: summary }, duplicate_of_id: 3 },
+        { ...newsItem, id: 5, title: "Материал без анализа", analysis: null, analysis_state: "failed", analysis_error: "Модель временно недоступна.", collection_warning: "Текст получен не полностью." },
+      ],
+    } : []);
+    const { container } = render(<AdminLayout>{await NewsItemsPage(emptyParams())}</AdminLayout>);
+    const list = screen.getByRole("list", { name: "Подобранные новости" });
+    expect(list.tagName).toBe("UL");
+    const entries = within(list).getAllByRole("listitem");
+    expect(entries).toHaveLength(2);
+    expect(entries.every(entry => entry.tagName === "LI" && entry.parentElement === list)).toBe(true);
+    const row = within(within(entries[0]).getByRole("article", { name: newsItem.title }));
+    expect(row.getByText(summary.trim()).textContent).toBe(summary);
+    expect(row.getByText(newsAnalysis.editorial_comment_ru, { exact: false })).toBeTruthy();
+    expect(row.getByText(`${newsItem.source_name} · 08.10.2026`)).toBeTruthy();
+    expect(row.getByText("Для статьи", { selector: "dt" }).nextElementSibling?.textContent).toContain("86.0");
+    expect(row.getByText("Короткая новость", { selector: "dt" }).nextElementSibling?.textContent).toContain("82.0");
+    for (const label of ["Анализ готов", "Подходит тематике", "Нужна проверка фактов", "Исследования", "Темы: AI Engineering"]) expect(row.getByText(label)).toBeTruthy();
+    expect(row.getByRole("link", { name: "материалом № 3" }).getAttribute("href")).toBe("/admin/news/items/3");
+    expect(row.getByRole("button", { name: "Добавить в план" })).toBeTruthy();
+    fireEvent.click(row.getByText("Редакторское решение", { selector: "summary" }));
+    expect(row.getByRole("button", { name: "Отложить" })).toBeTruthy();
+    expect(row.getByRole("button", { name: "Отклонить" })).toBeTruthy();
+    expect(row.getByLabelText("Назначение")).toBeTruthy();
+    expect(row.getByLabelText("Комментарий редактора")).toBeTruthy();
+    const pendingRow = within(entries[1]);
+    expect(pendingRow.getByText(newsItem.excerpt)).toBeTruthy();
+    expect(pendingRow.getByText("Ошибка анализа")).toBeTruthy();
+    expect(pendingRow.getByText("Модель временно недоступна.")).toBeTruthy();
+    expect(pendingRow.getByText("Сбор материала: Текст получен не полностью.")).toBeTruthy();
     expect((await axe(container)).violations).toEqual([]);
   });
 
@@ -223,7 +275,7 @@ describe("protected editorial routes", () => {
     ["running", "Анализируется"],
     ["failed", "Ошибка анализа"],
     ["insufficient_text", "Недостаточно текста"],
-  ])("shows the actual %s analysis state on the collection card", async (state, label) => {
+  ])("shows the actual %s analysis state on the collection row", async (state, label) => {
     vi.mocked(adminFetch).mockImplementation(async path => path.startsWith("/news/items?") ? { ...paged, items: [{ ...newsItem, analysis: null, status: "pending_analysis", analysis_state: state }], total: 1 } : []);
     render(<AdminLayout>{await NewsItemsPage(emptyParams())}</AdminLayout>);
     expect(screen.getByText(label, { selector: "span" })).toBeTruthy();

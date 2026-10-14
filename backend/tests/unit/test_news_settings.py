@@ -13,6 +13,8 @@ from src.core.news_settings import NewsSettings
     {"heartbeat_seconds": 60, "lease_seconds": 120},
     {"http_retries": 0},
     {"llm_retries": 0},
+    {"llm_concurrency": 0},
+    {"llm_concurrency": 5},
     {"llm_api_url": "https://user:password@provider.example/api"},
     {"llm_api_url": "https://provider.example/api?key=secret"},
     {"llm_api_url": "http://provider.example/api"},
@@ -20,6 +22,12 @@ from src.core.news_settings import NewsSettings
 def test_invalid_worker_settings_fail_closed(changes):
     with pytest.raises(ValidationError):
         NewsSettings(_env_file=None, **changes)
+
+
+def test_four_analysis_workers_are_supported_without_changing_default(monkeypatch):
+    monkeypatch.delenv("NEWS_LLM_CONCURRENCY", raising=False)
+    assert NewsSettings(_env_file=None).llm_concurrency == 1
+    assert NewsSettings(_env_file=None, llm_concurrency=4).llm_concurrency == 4
 
 
 def test_readiness_requires_all_provider_values_and_repr_excludes_credentials():

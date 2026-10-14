@@ -15,7 +15,7 @@ const sections = [
 export function NewsShell({ username, current, title, description, children }: {
   username: string; current: typeof sections[number]["key"]; title: string; description?: string; children: ReactNode;
 }) {
-  return <AdminShell username={username} current={current === "plan" ? "plan" : "news"}>
+  return <AdminShell username={username} current="news">
     <header className="admin-heading"><p className="news-eyebrow">Редакционный центр</p><h1>{title}</h1>{description && <p className="admin-muted">{description}</p>}</header>
     <nav aria-label="Редакционный центр"><ul className="admin-nav news-nav">{sections.map(section => <li key={section.key}>
       <Link prefetch={false} href={section.href} aria-current={current === section.key ? "page" : undefined}>{section.label}</Link>

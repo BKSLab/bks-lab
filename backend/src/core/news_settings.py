@@ -31,7 +31,7 @@ class NewsSettings(BaseSettings):
     llm_model: str = ""
     llm_api_url: str = Field(default="", repr=False)
     llm_api_key: SecretStr = Field(default=SecretStr(""), repr=False)
-    llm_concurrency: int = Field(default=1, ge=1, le=2)
+    llm_concurrency: int = Field(default=1, ge=1, le=4)
     llm_timeout_seconds: float = Field(default=60, gt=0, le=300)
     llm_max_tokens: int = Field(default=1800, ge=128, le=8192)
     llm_retries: int = Field(default=2, ge=1, le=5)

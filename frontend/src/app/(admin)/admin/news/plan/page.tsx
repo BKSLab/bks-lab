@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { AdminPagination } from "@/components/admin/AdminPagination";
-import { NewsItemCard } from "@/components/admin/news/NewsItemCard";
+import { NewsItemRow } from "@/components/admin/news/NewsItemRow";
 import { NewsShell } from "@/components/admin/news/NewsShell";
 import { adminFetch, requireAdmin } from "@/lib/admin-api";
 import { adminHref, adminPage, type AdminSearchParams } from "@/lib/admin-api/params";
@@ -21,7 +21,7 @@ export default async function NewsPlanPage({ searchParams }: { searchParams: Pro
     <section className="admin-section" aria-label="Материалы в плане">
       <div className="news-actions"><Link className="admin-button" prefetch={false} href="/admin/news/items">Выбрать материалы из подборок</Link></div>
       <p className="admin-muted">В плане: {data.total}.</p>
-      {data.items.length ? <div className="news-items">{data.items.map(item => <NewsItemCard key={item.id} item={item} planned />)}</div>
+      {data.items.length ? <ul className="news-items" aria-label="План публикаций">{data.items.map(item => <li key={item.id}><NewsItemRow item={item} planned /></li>)}</ul>
         : <div className="admin-empty"><p>{data.total ? "На этой странице нет материалов. Вернитесь на первую страницу плана." : "План пока пуст. Откройте подборки и нажмите «Добавить в план» под понравившейся выжимкой."}</p></div>}
       <AdminPagination path="/admin/news/plan" page={data.page} total={data.total} pages={data.pages ?? Math.ceil(data.total / data.page_size)} />
     </section>

@@ -57,11 +57,13 @@ export async function HomeContent() {
           </div>
           <Container className="home-hero-inner">
             <div className="hero-copy">
-              <p className="eyebrow mb-6">РАЗРАБОТКА · ПРОЕКТЫ · ИДЕИ</p>
               <h1 id="home-title" className="home-title">
-                Разработка. Управление. Искусственный интеллект. Идеи, которые
-                работают.
+                Проверяю идеи на практике.
               </h1>
+              <p className="mt-6 text-lg leading-relaxed text-text-muted">
+                Эксперименты с AI, собственные инструменты и новости технологий —
+                с авторским разбором и выводами.
+              </p>
               <div className="mt-8 flex flex-wrap gap-3">
                 <Link href="/projects" className="button-primary">
                   Мои проекты <ArrowRightIcon className="h-4 w-4" />
