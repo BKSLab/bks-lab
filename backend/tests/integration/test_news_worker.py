@@ -6,12 +6,14 @@ from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock
 
+import httpx
 import pytest
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from pydantic import SecretStr
 from sqlalchemy import func, select, update
 
 from src.background_tasks.news_health import is_healthy
+from src.clients.news_http import NewsHttpResponse, SafeNewsHttpClient
 from src.background_tasks.news_scheduler import NewsScheduler, latest_scheduled_slot
 from src.clients.news_sources import NewsSourceClient
 from src.core.news_settings import NewsSettings
@@ -69,7 +71,7 @@ def collector():
         [CollectedItem(
             external_id="post-1", url="https://source.example/article",
             canonical_url="https://source.example/article", title="A useful material",
-            description="Plain source excerpt", content="Collected text survives failed AI calls.",
+            description="Plain source excerpt", content="Collected text survives failed AI calls. " * 8,
         )], etag='"version-one"',
     )
     client.discover.return_value = DiscoveryResult("rss", "https://source.example/feed", [])
@@ -407,3 +409,132 @@ async def test_source_edit_during_fetch_discards_the_old_configuration_result(
 )
 def test_latest_scheduled_slot_preserves_local_day_and_start(now, zone, expected):
     assert latest_scheduled_slot(now, ("08:00", "14:00", "20:00"), zone) == expected
+
+
+async def test_repeated_collection_keeps_import_boundary_without_backfilling_archive(
+    worker_scope, worker_config, analyzer,
+):
+    source = await add_source(worker_scope)
+    now = datetime.now(timezone.utc)
+    current = [now]
+    http = AsyncMock(spec=SafeNewsHttpClient)
+    description = "A detailed account of the implementation, measurements and practical results. " * 12
+
+    def feed(include_new=False):
+        posts = [("recent", now - timedelta(days=4)), ("archive", now - timedelta(days=60))]
+        if include_new:
+            posts.insert(0, ("new", now + timedelta(hours=1)))
+        body = "<rss version='2.0'><channel><title>News</title>" + "".join(
+            f"<item><guid>{key}</guid><title>{key}</title><link>https://source.example/{key}</link>"
+            f"<pubDate>{date.strftime('%a, %d %b %Y %H:%M:%S GMT')}</pubDate>"
+            f"<description>{description}</description></item>" for key, date in posts
+        ) + "</channel></rss>"
+        return NewsHttpResponse(source.url, 200, body.encode(), httpx.Headers())
+
+    http.get.return_value = feed()
+    pipeline = NewsPipeline(
+        repositories=worker_scope, collector=NewsSourceClient(http), analyzer=analyzer,
+        config=worker_config, utc_now=lambda: current[0],
+    )
+    await enqueue_collect(worker_scope, source.id)
+    assert await pipeline.run_once(("collect",))
+    async with worker_scope() as repositories:
+        first = await repositories.sources.get(source.id)
+        cutoff = first.cursor["initial_cutoff_at"]
+    current[0] += timedelta(days=1)
+    http.get.return_value = feed(include_new=True)
+    second = await enqueue_collect(worker_scope, source.id)
+    assert await pipeline.run_once(("collect",))
+    async with worker_scope() as repositories:
+        items, total = await repositories.items.list_page(page=1, page_size=50)
+        result = await repositories.jobs.get(second.id)
+        assert total == 2
+        assert {item.title for item in items} == {"recent", "new"}
+        assert result.result["new"] == 1 and result.result["unchanged"] == 1
+        assert (await repositories.sources.get(source.id)).cursor["initial_cutoff_at"] == cutoff
+
+
+async def test_manual_all_sources_bypasses_interval_but_scheduled_collection_does_not(
+    worker_scope, pipeline, collector,
+):
+    source = await add_source(worker_scope)
+    await enqueue_collect(worker_scope, source.id)
+    assert await pipeline.run_once(("collect",))
+    async with worker_scope() as repositories:
+        await repositories.jobs.enqueue("collect", payload={"scheduled_slot": "UTC:2026-01-01:08:00"})
+    assert await pipeline.run_once(("collect",))
+    assert collector.fetch.await_count == 1
+    async with worker_scope() as repositories:
+        await repositories.jobs.enqueue("collect")
+    assert await pipeline.run_once(("collect",))
+    assert collector.fetch.await_count == 2
+
+
+async def test_failed_text_refresh_preserves_analysis_and_does_not_cache_failure(
+    worker_scope, pipeline, collector, analyzer,
+):
+    source = await add_source(worker_scope)
+    await enqueue_collect(worker_scope, source.id)
+    assert await pipeline.run_once(("collect",))
+    assert await pipeline.run_once(("analyze",))
+    async with worker_scope() as repositories:
+        before = (await repositories.items.list_page(page=1, page_size=10))[0][0]
+    original = collector.fetch.return_value.items[0]
+    collector.fetch.return_value = CollectionResult([
+        CollectedItem(original.external_id, original.url, original.canonical_url, original.title,
+                      metadata={"collection_status": "fetch_failed", "collection_warning": "Page unavailable."}),
+    ], etag="bad-text", warnings=["Page unavailable."])
+    queued = await enqueue_collect(worker_scope, source.id)
+    assert await pipeline.run_once(("collect",))
+    assert not await pipeline.run_once(("analyze",))
+    async with worker_scope() as repositories:
+        item = await repositories.items.get(before.id)
+        saved_source = await repositories.sources.get(source.id)
+        result = await repositories.jobs.get(queued.id)
+        assert item.content == before.content and item.content_hash == before.content_hash
+        assert item.latest_analysis_id == before.latest_analysis_id
+        assert saved_source.health == "degraded" and saved_source.etag is None
+        assert result.result["warnings"] == 1 and result.result["updated"] == 0
+    analyzer.analyze.assert_awaited_once()
+
+
+@pytest.mark.parametrize("clear_text", [False, True])
+async def test_explicit_repair_fetches_existing_url_and_queues_only_one_analysis(
+    worker_scope, pipeline, collector, analyzer, session_factory, clear_text,
+):
+    source = await add_source(worker_scope)
+    await enqueue_collect(worker_scope, source.id)
+    assert await pipeline.run_once(("collect",))
+    assert await pipeline.run_once(("analyze",))
+    async with worker_scope() as repositories:
+        item = (await repositories.items.list_page(page=1, page_size=10))[0][0]
+        jobs = await repositories.jobs.enqueue_repair(source.id, [item.id])
+    if clear_text:
+        async with session_factory() as session:
+            await session.execute(update(NewsItem).where(NewsItem.id == item.id).values(content="", excerpt=""))
+            await session.commit()
+    collector.refetch.return_value = CollectionResult(collector.fetch.return_value.items)
+    assert await pipeline.run_once(("collect",))
+    collector.refetch.assert_awaited_once()
+    assert collector.fetch.await_count == 1
+    assert await pipeline.enqueue_pending(await pipeline.get_settings()) == 0
+    assert await pipeline.run_once(("analyze",))
+    assert not await pipeline.run_once(("analyze",))
+    async with worker_scope() as repositories:
+        assert (await repositories.items.list_page(page=1, page_size=10))[1] == 1
+        assert (await repositories.jobs.get(jobs[0].id)).result["new"] == 0
+    assert analyzer.analyze.await_count == 2
+    async with session_factory() as session:
+        assert await session.scalar(select(func.count()).select_from(NewsJob).where(NewsJob.kind == "analyze")) == 2
+
+
+async def test_late_backlog_snapshot_does_not_repeat_completed_analysis(worker_scope, pipeline, analyzer):
+    source = await add_source(worker_scope)
+    await enqueue_collect(worker_scope, source.id)
+    assert await pipeline.run_once(("collect",))
+    assert await pipeline.run_once(("analyze",))
+    async with worker_scope() as repositories:
+        item = (await repositories.items.list_page(page=1, page_size=10))[0][0]
+        await repositories.jobs.enqueue("analyze", item_id=item.id, payload={"content_hash": item.content_hash})
+    assert await pipeline.run_once(("analyze",))
+    analyzer.analyze.assert_awaited_once()

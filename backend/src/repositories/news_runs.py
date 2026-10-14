@@ -10,6 +10,16 @@ from src.repositories.news_base import NewsRepository
 
 
 class NewsRunRepository(NewsRepository):
+    async def first_completed_at(self, source_id: int) -> datetime | None:
+        """Recover the initial collection boundary for sources created before cursors stored it."""
+        async with self.operation():
+            return await self.db_session.scalar(
+                select(func.min(NewsSourceRun.started_at)).where(
+                    NewsSourceRun.source_id == source_id,
+                    NewsSourceRun.status == "completed",
+                )
+            )
+
     async def begin(
         self, source_id: int, job_id: int | None, *, owner_token: str | None = None
     ) -> NewsSourceRun:

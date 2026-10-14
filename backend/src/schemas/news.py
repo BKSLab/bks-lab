@@ -422,6 +422,11 @@ class ItemRow(BaseModel):
     last_seen_at: datetime
     updated_at: datetime | None
     status: NewsStatus
+    analysis_state: Literal["analyzed", "queued", "running", "failed", "insufficient_text", "pending"] = Field(
+        description="Actual state of processing the current material."
+    )
+    analysis_error: str | None = Field(default=None, description="Safe terminal analysis error.")
+    collection_warning: str | None = Field(default=None, description="Safe warning from the latest text fetch.")
     duplicate_of_id: int | None
     analysis: AnalysisRow | None
     decision: DecisionRow | None

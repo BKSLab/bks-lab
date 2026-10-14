@@ -9,15 +9,38 @@ import functools
 import logging
 import random
 from collections.abc import Callable
-from typing import Any, TypeVar
+from typing import Any, TypeVar, get_args
 
 import httpx
 from pydantic import BaseModel, ValidationError
+from pydantic_core import ErrorType
 
 from src.exceptions.llm import LlmApiRequestError, LlmClientContentError, LlmClientRequestError
 
 logger = logging.getLogger(__name__)
 PydanticModel = TypeVar("PydanticModel", bound=BaseModel)
+_VALIDATION_ERROR_TYPES = frozenset(get_args(ErrorType))
+_MAX_VALIDATION_ISSUES = 5
+_MAX_VALIDATION_PATH_LENGTH = 128
+
+
+def _validation_issues(error: ValidationError, schema: type[BaseModel]) -> list[dict[str, str]]:
+    """Keep bounded native error codes and trusted schema fields, never input keys."""
+    document = schema.model_json_schema()
+    field_names = {
+        name
+        for definition in (document, *document.get("$defs", {}).values())
+        for name in definition.get("properties", {})
+    }
+    issues = []
+    for issue in error.errors(include_url=False, include_context=False, include_input=False)[:_MAX_VALIDATION_ISSUES]:
+        path = ".".join(
+            str(part) if isinstance(part, int) else part if part in field_names else "*"
+            for part in issue["loc"][:8]
+        )[:_MAX_VALIDATION_PATH_LENGTH] or "$"
+        error_type = issue["type"] if issue["type"] in _VALIDATION_ERROR_TYPES else "unknown"
+        issues.append({"path": path, "type": error_type})
+    return issues
 
 
 class LlmClient:
@@ -86,7 +109,11 @@ class LlmClient:
         content = self._extract_content(response)
         try:
             return schema.model_validate_json(content)
-        except ValidationError:
+        except ValidationError as error:
+            logger.warning(
+                "LLM schema validation failed error_count=%s issues=%s",
+                error.error_count(), _validation_issues(error, schema),
+            )
             raise LlmClientContentError("Response failed schema validation") from None
 
     async def _fetch_with_retries(self, payload: dict, extractor: Callable[[dict], Any]) -> Any:

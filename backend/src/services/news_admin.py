@@ -7,6 +7,7 @@ from pydantic import ValidationError
 from src.core.news_settings import NewsSettings
 from src.exceptions.news import (
     NewsDiscoveryRequiredError,
+    NewsInsufficientTextError,
     NewsNotFoundError,
     NewsValidationError,
 )
@@ -40,6 +41,7 @@ from src.schemas.news import (
     SourceRow,
 )
 from src.schemas.pagination import Paged
+from src.schemas.news_collection import NEWS_MIN_CONTENT_CHARS
 
 
 class NewsAdminService:
@@ -87,16 +89,28 @@ class NewsAdminService:
         )
 
     @classmethod
-    def item_row(cls, row: Any) -> ItemRow:
+    def item_row(cls, row: Any, job: Any = None) -> ItemRow:
+        text_length = max(len(row.content), len(row.excerpt))
+        # Text retention may remove a previously analyzed body; that does not invalidate its result.
+        insufficient = text_length < NEWS_MIN_CONTENT_CHARS and (text_length > 0 or not row.analysis)
+        if insufficient:
+            state = "insufficient_text"
+        elif job is not None and job.status in {"queued", "running", "failed", "cancelled"}:
+            state = "failed" if job.status == "cancelled" else job.status
+        else:
+            state = "analyzed" if row.analysis else "pending"
         return ItemRow(
             **{
                 key: getattr(row, key)
                 for key in ItemRow.model_fields
-                if key not in {"source_name", "analysis", "decision"}
+                if key not in {"source_name", "analysis", "decision", "analysis_state", "analysis_error", "collection_warning"}
             },
             source_name=row.source.name,
             analysis=cls.analysis_row(row.analysis) if row.analysis else None,
             decision=DecisionRow.model_validate(row.decision) if row.decision else None,
+            analysis_state=state,
+            analysis_error=(job.error or "Анализ не завершён. Можно повторить попытку.") if state == "failed" else None,
+            collection_warning=(row.metadata_json or {}).get("collection_warning"),
         )
 
     async def list_sources(self) -> list[SourceRow]:
@@ -198,8 +212,9 @@ class NewsAdminService:
         rows, total = await self.items.list_page(
             page=page, page_size=page_size, **filters
         )
+        jobs = await self.jobs.latest_analyses([row.id for row in rows])
         return Paged[ItemRow].build(
-            [self.item_row(row) for row in rows], total, page, page_size
+            [self.item_row(row, jobs.get(row.id)) for row in rows], total, page, page_size
         )
 
     async def get_item(self, item_id: int) -> ItemDetail:
@@ -209,8 +224,9 @@ class NewsAdminService:
             raise NewsNotFoundError
         analyses = await self.analyses.list_for_item(item_id)
         decisions = await self.decisions.list_for_item(item_id)
+        jobs = await self.jobs.latest_analyses([item_id])
         return ItemDetail(
-            **self.item_row(row).model_dump(),
+            **self.item_row(row, jobs.get(item_id)).model_dump(),
             content=row.content,
             analysis_history=[self.analysis_row(item) for item in analyses],
             decision_history=[DecisionRow.model_validate(item) for item in decisions],
@@ -232,6 +248,8 @@ class NewsAdminService:
         item = await self.items.get(item_id)
         if item is None:
             raise NewsNotFoundError
+        if max(len(item.content), len(item.excerpt)) < NEWS_MIN_CONTENT_CHARS:
+            raise NewsInsufficientTextError
         job = await self.jobs.enqueue(
             "analyze",
             item_id=item_id,

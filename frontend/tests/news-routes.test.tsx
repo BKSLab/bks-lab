@@ -14,6 +14,7 @@ vi.mock("next/navigation", () => ({
 import AdminLayout from "@/app/(admin)/layout";
 import NewsPage from "@/app/(admin)/admin/news/page";
 import NewsItemsPage from "@/app/(admin)/admin/news/items/page";
+import NewsPlanPage from "@/app/(admin)/admin/news/plan/page";
 import NewsItemPage from "@/app/(admin)/admin/news/items/[id]/page";
 import NewsSourcesPage from "@/app/(admin)/admin/news/sources/page";
 import NewsCataloguePage from "@/app/(admin)/admin/news/sources/catalogue/page";
@@ -25,7 +26,7 @@ import NewsRunsPage from "@/app/(admin)/admin/news/runs/page";
 import NewsJobPage from "@/app/(admin)/admin/news/jobs/[id]/page";
 import { adminFetch, requireAdmin } from "@/lib/admin-api";
 import { sourceCatalogue } from "./news-catalogue-fixtures";
-import { newsAnalysis, newsCategory, newsItem, newsJob, newsSettings, newsSource, newsTopic } from "./news-fixtures";
+import { newsAnalysis, newsCategory, newsDecision, newsItem, newsJob, newsSettings, newsSource, newsTopic } from "./news-fixtures";
 
 const paged = { items: [], total: 0, page: 1, page_size: 20, pages: 0 };
 const emptyParams = () => ({ searchParams: Promise.resolve({}) });
@@ -58,6 +59,7 @@ describe("protected editorial routes", () => {
   it.each([
     ["entry", () => NewsPage()],
     ["items", () => NewsItemsPage(emptyParams())],
+    ["publication plan", () => NewsPlanPage(emptyParams())],
     ["item", () => NewsItemPage({ params: Promise.resolve({ id: "4" }) })],
     ["sources", () => NewsSourcesPage()],
     ["source catalogue", () => NewsCataloguePage()],
@@ -80,6 +82,15 @@ describe("protected editorial routes", () => {
   it("links the complete catalogue from connected sources", async () => {
     render(<AdminLayout>{await NewsSourcesPage()}</AdminLayout>);
     expect(screen.getByRole("link", { name: "Каталог источников (98)" }).getAttribute("href")).toBe("/admin/news/sources/catalogue");
+  });
+
+  it("distinguishes collection warnings from a failed source", async () => {
+    vi.mocked(adminFetch).mockImplementation(async path => path === "/news/sources"
+      ? [{ ...newsSource, active: true, health: "degraded", last_success_at: "2026-10-14T08:00:00Z", last_error: "Не удалось загрузить текст некоторых материалов." }] : []);
+    render(<AdminLayout>{await NewsSourcesPage()}</AdminLayout>);
+    expect(screen.getByText("Есть предупреждения")).toBeTruthy();
+    expect(screen.getByText("Не удалось загрузить текст некоторых материалов.")).toBeTruthy();
+    expect(screen.queryByText("Ошибка обхода")).toBeNull();
   });
 
   it.each([
@@ -150,6 +161,47 @@ describe("protected editorial routes", () => {
     expect(screen.getByRole("link", { name: "Добавить источник" }).getAttribute("href")).toBe("/admin/news/sources/new");
   });
 
+  it("shows the empty publication plan and its selected navigation tabs", async () => {
+    const { container } = render(<AdminLayout>{await NewsPlanPage(emptyParams())}</AdminLayout>);
+    expect(adminFetch).toHaveBeenCalledWith("/news/items?decision=in_work&page=1&page_size=20");
+    expect(screen.getByText(/План пока пуст/)).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Выбрать материалы из подборок" }).getAttribute("href")).toBe("/admin/news/items");
+    for (const name of ["Разделы панели", "Редакционный центр"]) {
+      expect(within(screen.getByRole("navigation", { name })).getByRole("link", { name: "План публикаций" }).getAttribute("aria-current")).toBe("page");
+    }
+    expect(screen.getAllByRole("main")).toHaveLength(1);
+    expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
+    expect((await axe(container)).violations).toEqual([]);
+  });
+
+  it("shows the saved summary, source, chosen format and notes in the plan", async () => {
+    vi.mocked(adminFetch).mockResolvedValue({ ...paged, items: [{ ...newsItem, decision: newsDecision }], total: 1 });
+    const { container } = render(<AdminLayout>{await NewsPlanPage(emptyParams())}</AdminLayout>);
+    const card = within(screen.getByRole("article", { name: newsItem.title }));
+    expect(card.getByText(newsAnalysis.summary_ru)).toBeTruthy();
+    expect(card.getByText(newsDecision.comment, { selector: "p" })).toBeTruthy();
+    expect(card.getByText("Назначение в плане:").parentElement?.textContent).toContain("Короткая новость");
+    expect(card.getByRole("link", { name: /^Первоисточник/ }).getAttribute("href")).toBe(newsItem.url);
+    expect(card.getByRole("link", { name: newsItem.title }).getAttribute("href")).toBe("/admin/news/items/4");
+    expect(card.queryByRole("button", { name: "Добавить в план" })).toBeNull();
+    expect(card.getByRole("button", { name: "Убрать из плана" })).toBeTruthy();
+    expect((await axe(container)).violations).toEqual([]);
+  });
+
+  it("keeps pagination scoped to the plan and ignores conflicting collection filters", async () => {
+    vi.mocked(adminFetch).mockResolvedValue({ ...paged, total: 41, page: 2, pages: 3 });
+    render(<AdminLayout>{await NewsPlanPage({ searchParams: Promise.resolve({ page: "2", decision: "rejected", format: "longread_candidate" }) })}</AdminLayout>);
+    expect(adminFetch).toHaveBeenCalledWith("/news/items?decision=in_work&page=2&page_size=20");
+    expect(screen.getByRole("link", { name: "Назад" }).getAttribute("href")).toBe("/admin/news/plan?page=1");
+    expect(screen.getByRole("link", { name: "Вперёд" }).getAttribute("href")).toBe("/admin/news/plan?page=3");
+  });
+
+  it("offers a return to the first plan page after its last item is removed", async () => {
+    vi.mocked(adminFetch).mockResolvedValue({ ...paged, page: 2 });
+    render(<AdminLayout>{await NewsPlanPage({ searchParams: Promise.resolve({ page: "2" }) })}</AdminLayout>);
+    expect(screen.getByRole("link", { name: "На первую" }).getAttribute("href")).toBe("/admin/news/plan?page=1");
+  });
+
   it("includes the entire selected final UTC day in date filtering", async () => {
     await NewsItemsPage({ searchParams: Promise.resolve({ date_from: "2026-10-01", date_to: "2026-10-08" }) });
     const request = vi.mocked(adminFetch).mock.calls.find(([path]) => path.startsWith("/news/items?"))![0];
@@ -165,11 +217,64 @@ describe("protected editorial routes", () => {
     expect(vi.mocked(adminFetch).mock.calls.some(([path]) => path.startsWith("/news/items?"))).toBe(false);
   });
 
-  it("renders pending items without assuming analysis exists", async () => {
-    vi.mocked(adminFetch).mockImplementation(async path => path.startsWith("/news/items?") ? { ...paged, items: [{ ...newsItem, analysis: null, status: "pending_analysis" }], total: 1 } : []);
+  it.each([
+    ["pending", "Ожидает постановки в очередь"],
+    ["queued", "В очереди на анализ"],
+    ["running", "Анализируется"],
+    ["failed", "Ошибка анализа"],
+    ["insufficient_text", "Недостаточно текста"],
+  ])("shows the actual %s analysis state on the collection card", async (state, label) => {
+    vi.mocked(adminFetch).mockImplementation(async path => path.startsWith("/news/items?") ? { ...paged, items: [{ ...newsItem, analysis: null, status: "pending_analysis", analysis_state: state }], total: 1 } : []);
     render(<AdminLayout>{await NewsItemsPage(emptyParams())}</AdminLayout>);
-    expect(screen.getByText("Ожидает анализа", { selector: "span" })).toBeTruthy();
+    expect(screen.getByText(label, { selector: "span" })).toBeTruthy();
+    expect(screen.queryByText("Ожидает анализа")).toBeNull();
+    expect(screen.getByRole("option", { name: "Без анализа" }).getAttribute("value")).toBe("pending_analysis");
     expect(screen.getByRole("link", { name: newsItem.title }).getAttribute("href")).toBe("/admin/news/items/4");
+  });
+
+  it.each([
+    ["pending", "Ожидает постановки в очередь"],
+    ["queued", "В очереди на анализ"],
+    ["running", "Анализируется"],
+  ])("shows the %s analysis state on the material page", async (state, label) => {
+    vi.mocked(adminFetch).mockResolvedValue({ ...newsItem, analysis: null, status: "pending_analysis", analysis_state: state, analysis_history: [] });
+    render(<AdminLayout>{await NewsItemPage({ params: Promise.resolve({ id: "4" }) })}</AdminLayout>);
+    expect(screen.getByText(label)).toBeTruthy();
+    expect(screen.queryByText(/Материал ожидает анализа/)).toBeNull();
+  });
+
+  it("shows a failed analysis reason and allows retry without promising background work", async () => {
+    vi.mocked(adminFetch).mockResolvedValue({ ...newsItem, analysis: null, status: "pending_analysis", analysis_state: "failed", analysis_error: "Модель временно недоступна.", analysis_history: [] });
+    const { container } = render(<AdminLayout>{await NewsItemPage({ params: Promise.resolve({ id: "4" }) })}</AdminLayout>);
+    expect(screen.getByText("Ошибка анализа")).toBeTruthy();
+    expect(screen.getByText("Модель временно недоступна.")).toBeTruthy();
+    expect(screen.queryByText(/ожидает анализа|Ожидает постановки|В очереди на анализ/)).toBeNull();
+    expect((screen.getByRole("button", { name: "Повторить анализ" }) as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.getAllByRole("main")).toHaveLength(1);
+    expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
+    expect((await axe(container)).violations).toEqual([]);
+  });
+
+  it("guides a material with insufficient text to collection and hides analysis retry", async () => {
+    vi.mocked(adminFetch).mockResolvedValue({ ...newsItem, analysis: null, content: null, excerpt: "", status: "pending_analysis", analysis_state: "insufficient_text", collection_warning: "Не удалось загрузить страницу.", analysis_history: [] });
+    const { container } = render(<AdminLayout>{await NewsItemPage({ params: Promise.resolve({ id: "4" }) })}</AdminLayout>);
+    expect(screen.getByText("Недостаточно текста")).toBeTruthy();
+    expect(screen.getByText("Сбор материала: Не удалось загрузить страницу.")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Открыть источник для повторного сбора" }).getAttribute("href")).toBe("/admin/news/sources/7");
+    expect(screen.queryByRole("button", { name: "Повторить анализ" })).toBeNull();
+    expect(screen.queryByText(/Материал ожидает анализа/)).toBeNull();
+    expect((await axe(container)).violations).toEqual([]);
+  });
+
+  it("keeps a failed reanalysis visible alongside its previous result and escapes the reason", async () => {
+    const reason = '<img src=x onerror="alert(1)">';
+    vi.mocked(adminFetch).mockResolvedValue({ ...newsItem, analysis_state: "failed", analysis_error: reason });
+    const { container } = render(<AdminLayout>{await NewsItemPage({ params: Promise.resolve({ id: "4" }) })}</AdminLayout>);
+    expect(screen.getByText("Ошибка анализа")).toBeTruthy();
+    expect(screen.getByText(reason)).toBeTruthy();
+    expect(container.querySelector("img[src=x]")).toBeNull();
+    expect(screen.getByText("Ниже показан предыдущий анализ материала.")).toBeTruthy();
+    expect(screen.getAllByText(newsAnalysis.summary_ru)).toHaveLength(2);
   });
 
   it("escapes source text, guards external URLs, and shows analysis and decision history", async () => {

@@ -1,6 +1,7 @@
 export type NewsFormat = "longread_candidate" | "short_news_candidate";
 export type NewsDecisionValue = "in_work" | "deferred" | "rejected";
 export type NewsJobStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
+export type NewsAnalysisState = "analyzed" | "queued" | "running" | "failed" | "insufficient_text" | "pending";
 export type NewsScores = Record<"topical_fit" | "significance" | "freshness" | "article_potential", number>;
 
 export interface NewsPaged<T> {
@@ -79,6 +80,9 @@ export interface NewsItem {
   last_seen_at: string;
   updated_at: string | null;
   status: "pending_analysis" | "analyzed";
+  analysis_state: NewsAnalysisState;
+  analysis_error: string | null;
+  collection_warning: string | null;
   duplicate_of_id: number | null;
   analysis: NewsAnalysis | null;
   decision: NewsDecision | null;

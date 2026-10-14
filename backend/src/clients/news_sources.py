@@ -13,12 +13,12 @@ from typing import Any
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
 import feedparser
-from bs4 import BeautifulSoup, Tag
+from bs4 import BeautifulSoup, Comment, Tag
 from soupsieve import SelectorSyntaxError
 
 from src.clients.news_http import NewsHttpResponse, SafeNewsHttpClient, validate_public_url
 from src.exceptions.news_sources import NewsSourceError
-from src.schemas.news_collection import CollectedItem, CollectionResult, DiscoveryResult
+from src.schemas.news_collection import NEWS_MIN_CONTENT_CHARS, CollectedItem, CollectionResult, DiscoveryResult
 
 TRACKING_PARAMETERS = {"fbclid", "gclid", "yclid", "mc_cid", "mc_eid"}
 HTML_HEADINGS = "h2, h3, h4, h5, h6, [itemprop='headline']"
@@ -27,6 +27,18 @@ HTML_NAVIGATION_CLASS = re.compile(r"(?:^|[-_])(?:nav|navbar|navigation|menu)(?:
 HTML_READ_MORE = re.compile(r"^(?:read more|learn more|continue reading|подробнее|читать далее)\W*$", re.IGNORECASE)
 NON_ARTICLE_SUFFIXES = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg", ".ico", ".css", ".js",
                         ".pdf", ".zip", ".mp3", ".mp4", ".xml", ".json"}
+ARTICLE_NOISE_SELECTOR = (
+    "script, style, nav, aside, header, footer, form, noscript, template, button, "
+    "[role='navigation'], [role='banner'], [role='contentinfo'], [role='dialog'], "
+    "[role='button'], [hidden], [aria-hidden='true'], .overview-card-wrapper, "
+    ".article-actions, .share-buttons, .social-share, .newsletter-signup, .pagination, "
+    "[data-target='UpvoteControl'], [data-target='BlogAuthorsByline'], "
+    ".promoblock, noindex .event_list, .share-container, .article-bottom-info"
+)
+ARTICLE_BODY_SELECTOR = (
+    ".blog-content, [itemprop~='articleBody'], .post-content, .entry-content, "
+    ".article-body, .notebody, .publication-content, .text-with-summary, .podcast__rightside-content"
+)
 
 
 def normalize_url(value: str) -> str:
@@ -43,6 +55,10 @@ def clean_text(value: str, *, limit: int = 20000) -> str:
     soup = BeautifulSoup(value, "html.parser")
     for tag in soup.select("script, style, nav, header, footer, aside, form, noscript, template"):
         tag.decompose()
+    # Hydration comments may split a single word into adjacent text nodes.
+    for comment in soup.find_all(string=lambda value: isinstance(value, Comment)):
+        comment.extract()
+    soup.smooth()
     return re.sub(r"\s+", " ", soup.get_text(" ", strip=True)).strip()[:limit]
 
 
@@ -149,6 +165,8 @@ class NewsSourceClient:
         last_modified: str | None = None, first_run: bool = False,
         max_items: int = 50, lookback_days: int = 30,
         max_excerpt_chars: int | None = None,
+        cutoff: datetime | None = None,
+        known_urls: set[str] | None = None,
     ) -> CollectionResult:
         """Collect a bounded batch; conditional responses never remove stored items."""
         headers: dict[str, str] = {}
@@ -161,14 +179,26 @@ class NewsSourceClient:
             return CollectionResult([], etag, last_modified, True, response.url, kind)
         self._require_ok(response)
         adapter = self if max_excerpt_chars is None else NewsSourceClient(self.http, max_excerpt_chars)
-        cutoff = datetime.now(timezone.utc) - timedelta(days=lookback_days) if first_run else None
-        actual_kind, items = await asyncio.to_thread(adapter._parse, response, kind, config, max_items, cutoff)
+        if cutoff is None and first_run:
+            cutoff = datetime.now(timezone.utc) - timedelta(days=lookback_days)
+        actual_kind, items = await asyncio.to_thread(adapter._parse, response, kind, config, max_items, cutoff, known_urls)
         warnings: list[str] = []
         items = list(await asyncio.gather(*(adapter._enrich(item, warnings) for item in items)))
         return CollectionResult(
             items, response.headers.get("etag"), response.headers.get("last-modified"),
             False, response.url, actual_kind, list(dict.fromkeys(warnings)),
         )
+
+    async def refetch(
+        self, items: list[CollectedItem], *, max_excerpt_chars: int | None = None,
+    ) -> CollectionResult:
+        """Fetch stored publication URLs again, retaining identity without reusing old text."""
+        warnings: list[str] = []
+        adapter = self if max_excerpt_chars is None else NewsSourceClient(self.http, max_excerpt_chars)
+        refreshed = await asyncio.gather(*(
+            adapter._enrich(replace(item, description="", content=""), warnings) for item in items
+        ))
+        return CollectionResult(list(refreshed), kind="html", warnings=list(dict.fromkeys(warnings)))
 
     @staticmethod
     def _require_ok(response: NewsHttpResponse) -> None:
@@ -178,6 +208,7 @@ class NewsSourceClient:
     def _parse(
         self, response: NewsHttpResponse, kind: str | None, config: dict, limit: int,
         cutoff: datetime | None = None,
+        known_urls: set[str] | None = None,
     ) -> tuple[str, list[CollectedItem]]:
         body = response.content
         if re.search(br"<!\s*(?:DOCTYPE|ENTITY)\b", body, re.IGNORECASE) and kind == "rss":
@@ -186,10 +217,13 @@ class NewsSourceClient:
         if kind == "rss" or (kind is None and is_feed):
             if re.search(br"<!\s*(?:DOCTYPE|ENTITY)\b", body, re.IGNORECASE):
                 raise NewsSourceError("unsafe_xml", "Лента с объявлениями XML-сущностей не поддерживается.")
-            return "rss", self._parse_feed(body, response.url, limit, cutoff)
-        return "html", self._parse_html(body, response.url, config, limit, cutoff)
+            return "rss", self._parse_feed(body, response.url, limit, cutoff, known_urls)
+        return "html", self._parse_html(body, response.url, config, limit, cutoff, known_urls)
 
-    def _parse_feed(self, body: bytes, base: str, limit: int, cutoff: datetime | None = None) -> list[CollectedItem]:
+    def _parse_feed(
+        self, body: bytes, base: str, limit: int, cutoff: datetime | None = None,
+        known_urls: set[str] | None = None,
+    ) -> list[CollectedItem]:
         # A bytes argument can be interpreted by feedparser as a local path.
         feed = feedparser.parse(io.BytesIO(body), resolve_relative_uris=False)
         if not feed.get("version"):
@@ -204,8 +238,9 @@ class NewsSourceClient:
             title = clean_text(str(entry.get("title", "")), limit=1000)
             if not url or not title or url in seen:
                 continue
+            seen.add(url)
             published_at = _feed_date(entry, "published")
-            if cutoff and published_at and published_at < cutoff:
+            if cutoff and published_at and published_at < cutoff and url not in (known_urls or ()):
                 continue
             description = clean_text(str(entry.get("summary", "")), limit=self.max_excerpt_chars)
             contents = entry.get("content") or []
@@ -218,7 +253,6 @@ class NewsSourceClient:
                 published_at, _feed_date(entry, "updated"),
                 {"language": str(language)[:30], "method": "rss"},
             ))
-            seen.add(url)
             if len(items) >= limit:
                 break
         return items
@@ -248,7 +282,10 @@ class NewsSourceClient:
 
         return max(candidates, key=relevance) if candidates else None
 
-    def _parse_html(self, body: bytes, base: str, config: dict, limit: int, cutoff: datetime | None = None) -> list[CollectedItem]:
+    def _parse_html(
+        self, body: bytes, base: str, config: dict, limit: int, cutoff: datetime | None = None,
+        known_urls: set[str] | None = None,
+    ) -> list[CollectedItem]:
         soup = BeautifulSoup(body, "html.parser")
         for tag in soup.select("script, style, nav, aside, form, template, "
                                "[role='navigation'], [role='banner'], [role='contentinfo'], [role='dialog']"):
@@ -276,19 +313,20 @@ class NewsSourceClient:
                     title = clean_text(str(link["title"]), limit=1000)
                 if not url or not title or url in seen:
                     continue
+                # A nested link must not reintroduce a dated card rejected by the cutoff.
+                seen.add(url)
                 excerpt_node = self._select(node, config.get("content_selector"), "p, .summary, .excerpt")
                 excerpt = clean_text(str(excerpt_node or ""), limit=self.max_excerpt_chars)
                 date_node = (self._html_date(node) if automatic and not config.get("date_selector")
                              else self._select(node, config.get("date_selector"), "time"))
                 date_text = (str(date_node.get("datetime") or date_node.get_text(" ", strip=True)) if date_node else None)
                 published_at = _parse_date(date_text)
-                if cutoff and published_at and published_at < cutoff:
+                if cutoff and published_at and published_at < cutoff and url not in (known_urls or ()):
                     continue
                 items.append(CollectedItem(
                     None, url, url, title, excerpt, excerpt, published_at, None,
                     {"language": str(soup.html.get("lang", ""))[:30] if soup.html else "", "method": "html"},
                 ))
-                seen.add(url)
                 if len(items) >= limit:
                     break
             return items
@@ -402,16 +440,31 @@ class NewsSourceClient:
 
     async def _enrich(self, item: CollectedItem, warnings: list[str]) -> CollectedItem:
         if len(item.content or item.description) >= self.SUFFICIENT_DESCRIPTION_CHARS:
-            return item
+            return self._collection_quality(item, "ready")
         try:
             response = await self.http.get(item.url)
             self._require_ok(response)
             canonical, content = await asyncio.to_thread(self._article, response)
         except NewsSourceError:
-            warnings.append("Часть страниц недоступна для получения текста; сохранены карточки источника.")
-            return item
-        return replace(item, canonical_url=canonical or item.canonical_url,
-                       content=content if len(content) > len(item.content) else item.content)
+            warning = "Не удалось получить текст страницы; сохранена карточка источника."
+            warnings.append(warning)
+            return self._collection_quality(item, "fetch_failed", warning)
+        enriched = replace(item, canonical_url=canonical or item.canonical_url,
+                           content=content if len(content) > len(item.content) else item.content)
+        if len(enriched.content or enriched.description) >= NEWS_MIN_CONTENT_CHARS:
+            return self._collection_quality(enriched, "ready")
+        warning = "Недостаточно текста для анализа; сохранена карточка источника."
+        warnings.append(warning)
+        return self._collection_quality(enriched, "insufficient_text", warning)
+
+    @staticmethod
+    def _collection_quality(item: CollectedItem, status: str, warning: str | None = None) -> CollectedItem:
+        """Keep collection quality with the observation without discarding source metadata."""
+        metadata = {**item.metadata, "collection_status": status}
+        metadata.pop("collection_warning", None)
+        if warning:
+            metadata["collection_warning"] = warning
+        return replace(item, metadata=metadata)
 
     def _article(self, response: NewsHttpResponse) -> tuple[str | None, str]:
         soup = BeautifulSoup(response.content, "html.parser")
@@ -420,6 +473,55 @@ class NewsSourceClient:
         # A cross-domain canonical is untrusted attribution, not proof of identity.
         if canonical and urlsplit(canonical).hostname != urlsplit(response.url).hostname:
             canonical = None
-        node = soup.select_one("article") or soup.select_one("main")
-        content = clean_text(str(node), limit=self.max_excerpt_chars) if node else ""
-        return canonical, content
+        # A declared article body can live inside a layout <aside> (e.g. transcripts).
+        # Clean its children independently, before pruning page-level sidebars.
+        preferred = list(soup.select(ARTICLE_BODY_SELECTOR))
+        for heading in soup.select("[data-target='PaperContent'] h2"):
+            if clean_text(str(heading)).casefold() == "abstract":
+                abstract = heading.find_next_sibling()
+                if isinstance(abstract, Tag):
+                    preferred.append(abstract)
+        preferred = [node for node in preferred
+                     if not node.find_parent(["nav", "header", "footer", "form"])
+                     and not any(ancestor.has_attr("hidden") or ancestor.get("aria-hidden") == "true"
+                                 or ancestor.get("role") in {"navigation", "banner", "contentinfo", "dialog"}
+                                 for ancestor in [node, *node.parents])
+                     and not self._html_navigation(node)]
+        candidates = [self._article_fragment(node) for node in preferred]
+        content = max(candidates, key=len, default="")
+        if len(content) >= NEWS_MIN_CONTENT_CHARS:
+            return canonical, content
+        fallback = content
+        # Remove navigation before selecting: its repository/model cards can use <article>.
+        for node in soup.select(ARTICLE_NOISE_SELECTOR):
+            node.decompose()
+        candidates = [clean_text(str(node), limit=self.max_excerpt_chars)
+                      for node in soup.select("article, main, [role='main']")]
+        content = max(candidates, key=len, default="")
+        if len(content) >= NEWS_MIN_CONTENT_CHARS:
+            return canonical, content
+        if len(content) > len(fallback):
+            fallback = content
+        # Some static articles have only generated div classes. Accept substantial
+        # prose with a heading, never an unrestricted body/navigation text fallback.
+        if soup.select_one("h1"):
+            paragraphs = []
+            for paragraph in soup.select("p"):
+                if paragraph.find_parent("a") or self._html_navigation(paragraph):
+                    continue
+                text = clean_text(str(paragraph), limit=self.max_excerpt_chars)
+                linked_chars = sum(len(link.get_text(" ", strip=True)) for link in paragraph.select("a"))
+                if len(text) >= 80 and linked_chars <= len(text) * 0.2:
+                    paragraphs.append(text)
+            paragraphs = list(dict.fromkeys(paragraphs))
+            prose = " ".join(paragraphs)
+            if len(paragraphs) >= 3 and len(prose) >= self.SUFFICIENT_DESCRIPTION_CHARS:
+                return canonical, prose[:self.max_excerpt_chars]
+        return canonical, fallback
+
+    def _article_fragment(self, node: Tag) -> str:
+        """Remove controls from an explicitly identified article body, retaining its root."""
+        fragment = BeautifulSoup(node.decode_contents(), "html.parser")
+        for noise in fragment.select(ARTICLE_NOISE_SELECTOR):
+            noise.decompose()
+        return clean_text(str(fragment), limit=self.max_excerpt_chars)

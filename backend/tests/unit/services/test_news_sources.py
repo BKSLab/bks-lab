@@ -7,9 +7,10 @@ from unittest.mock import AsyncMock, Mock
 import httpx
 import pytest
 
-from src.clients.news_http import PinnedPublicTransport, SafeNewsHttpClient, validate_public_url
-from src.clients.news_sources import NewsSourceClient, normalize_url, prepare_collected_item
+from src.clients.news_http import NewsHttpResponse, PinnedPublicTransport, SafeNewsHttpClient, validate_public_url
+from src.clients.news_sources import NEWS_MIN_CONTENT_CHARS, NewsSourceClient, normalize_url, prepare_collected_item
 from src.exceptions.news_sources import NewsRobotsError, NewsSourceError, UnsafeNewsUrlError
+from src.schemas.news_collection import CollectedItem
 
 PUBLIC_IP = "93.184.216.34"
 
@@ -213,6 +214,7 @@ async def test_rss_guid_fallback_content_and_conditional_not_modified():
     assert result.items[0].external_id == "https://example.org/article"
     assert result.items[0].published_at == datetime(2026, 10, 8, 12, tzinfo=timezone.utc)
     assert result.items[0].updated_at is None
+    assert result.items[0].metadata["collection_status"] == "ready"
     assert unchanged.not_modified and not unchanged.items
     assert not any(request.url.path == "/article" for request in calls)
     assert calls[-1].headers["if-modified-since"] == result.last_modified
@@ -310,6 +312,185 @@ async def test_article_enrichment_canonical_and_stable_hash():
     assert data["normalized_url"] == "https://example.org/canonical"
     assert data["content"] == "Title Useful article text"
     assert data["content_hash"] == prepare_collected_item(second.items[0])["content_hash"]
+
+
+@pytest.mark.asyncio
+async def test_explicit_cutoff_also_limits_repeat_collection_before_item_limit():
+    description = "Detailed source description. " * 30
+    feed = f'''<rss version="2.0"><channel><title>News</title>
+      <item><guid>old</guid><link>https://example.org/old</link><title>Old</title>
+        <pubDate>01 Jan 2000 00:00:00 GMT</pubDate><description>{description}</description></item>
+      <item><guid>new</guid><link>https://example.org/new</link><title>Recent</title>
+        <pubDate>13 Oct 2026 00:00:00 GMT</pubDate><description>{description}</description></item>
+      </channel></rss>'''
+
+    async def handler(request):
+        return document("", status=404) if request.url.path == "/robots.txt" else document(feed, kind="application/rss+xml")
+
+    async with httpx.AsyncClient(transport=transport(handler)) as client:
+        source = NewsSourceClient(SafeNewsHttpClient(client, min_interval_seconds=0))
+        result = await source.fetch(
+            url="https://example.org/feed", kind="rss", config={}, first_run=False,
+            max_items=1, cutoff=datetime(2026, 9, 14, tzinfo=timezone.utc),
+        )
+    assert [item.external_id for item in result.items] == ["new"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["rss", "html"])
+async def test_cutoff_keeps_known_old_publications_for_content_repairs(kind):
+    description = "Detailed source description. " * 30
+    feed = f'''<rss version="2.0"><channel><title>News</title>
+      <item><link>https://example.org/unknown</link><title>Unknown archive</title>
+        <pubDate>01 Jan 2000 00:00:00 GMT</pubDate><description>{description}</description></item>
+      <item><link>https://example.org/known?utm_source=feed</link><title>Known archive</title>
+        <pubDate>01 Jan 2000 00:00:00 GMT</pubDate><description>{description}</description></item>
+      </channel></rss>'''
+    html = f'''<main><article><h2><a href="/unknown">Unknown archive</a></h2>
+      <time datetime="2000-01-01"></time><p>{description}</p></article>
+      <article><h2><a href="/known?utm_source=feed">Known archive</a></h2>
+      <time datetime="2000-01-01"></time><p>{description}</p></article></main>'''
+
+    async def handler(request):
+        if request.url.path == "/robots.txt":
+            return document("", status=404)
+        return document(feed, kind="application/rss+xml") if kind == "rss" else document(html)
+
+    async with httpx.AsyncClient(transport=transport(handler)) as client:
+        result = await NewsSourceClient(SafeNewsHttpClient(client, min_interval_seconds=0)).fetch(
+            url="https://example.org/feed", kind=kind, config={}, max_items=1,
+            cutoff=datetime(2026, 9, 14, tzinfo=timezone.utc), known_urls={"https://example.org/known"},
+        )
+    assert [item.url for item in result.items] == ["https://example.org/known"]
+
+
+@pytest.mark.parametrize("container", [
+    '<div class="blog-content">{content}</div>',
+    '<div itemprop="articleBody">{content}</div>',
+    '<article>{content}</article>',
+    '{content}',
+])
+def test_article_ignores_navigation_cards_and_dynamic_controls(container):
+    paragraph = "The technical article explains training, evaluation and deployment. " * 12
+    controls = '<button>Downloads 100 Likes 50</button><div class="share-buttons">Share 500</div>'
+    content = container.format(content=f"<p>{paragraph}</p>{controls}")
+    html = f'''<html><head><link rel="canonical" href="/canonical"></head><body>
+      <nav><article class="overview-card-wrapper group/repo">Model downloads 123</article></nav>
+      <aside><article>{'Sidebar repository metadata ' * 100}</article></aside>
+      <header><article>Trending models</article></header>
+      <footer><article>Footer recommendations</article></footer>
+      <div role="navigation"><article>{'Navigation ' * 100}</article></div>
+      <main>{content}</main></body></html>'''
+    source = NewsSourceClient(AsyncMock(spec=SafeNewsHttpClient))
+    canonical, extracted = source._article(NewsHttpResponse(
+        "https://example.org/post", 200, html.encode(), httpx.Headers(),
+    ))
+    assert canonical == "https://example.org/canonical"
+    assert extracted == paragraph.strip()
+
+
+def test_short_article_card_does_not_hide_substantial_main_content():
+    paragraph = "Actual publication body describing a software architecture. " * 12
+    html = f'<article>Small recommendation card</article><main><p>{paragraph}</p></main>'
+    source = NewsSourceClient(AsyncMock(spec=SafeNewsHttpClient))
+    _, extracted = source._article(NewsHttpResponse("https://example.org/post", 200, html.encode(), httpx.Headers()))
+    assert extracted == paragraph.strip()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure,status", [("request", "fetch_failed"), ("empty_layout", "insufficient_text")])
+async def test_failed_repeat_enrichment_records_quality_and_keeps_source_metadata(failure, status):
+    feed = '''<rss version="2.0"><channel><title>News</title><language>en</language>
+      <item><guid>stable</guid><link>https://example.org/post</link><title>Stable title</title>
+        <pubDate>13 Oct 2026 00:00:00 GMT</pubDate><description>Short RSS description</description>
+      </item></channel></rss>'''
+    failing = False
+
+    async def handler(request):
+        if request.url.path == "/robots.txt":
+            return document("", status=404)
+        if request.url.path == "/feed":
+            return document(feed, kind="application/rss+xml")
+        if failing:
+            return document("", status=403) if failure == "request" else document("<body>Unrecognized layout</body>")
+        return document("<article><p>" + "Meaningful article content. " * 80 + "</p></article>")
+
+    async with httpx.AsyncClient(transport=transport(handler)) as client:
+        source = NewsSourceClient(SafeNewsHttpClient(client, min_interval_seconds=0))
+        first = await source.fetch(url="https://example.org/feed", kind="rss", config={})
+        failing = True
+        second = await source.fetch(url="https://example.org/feed", kind="rss", config={})
+    assert first.items[0].metadata["collection_status"] == "ready"
+    assert len(first.items[0].content) > NEWS_MIN_CONTENT_CHARS
+    observed = second.items[0]
+    assert observed.content == observed.description == "Short RSS description"
+    assert observed.metadata["collection_status"] == status
+    assert observed.metadata["collection_warning"] in second.warnings
+    assert observed.metadata["language"] == "en"
+    assert observed.metadata["method"] == "rss"
+    assert observed.published_at == first.items[0].published_at
+    assert observed.external_id == first.items[0].external_id
+    assert prepare_collected_item(observed)["metadata_json"]["collection_status"] == status
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("length,status", [(NEWS_MIN_CONTENT_CHARS - 1, "insufficient_text"), (NEWS_MIN_CONTENT_CHARS, "ready")])
+async def test_enrichment_requires_minimum_cleaned_text(length, status):
+    text = ("The publication explains a technical approach. " * 10)[:length - 1] + "."
+    feed = '''<rss version="2.0"><channel><title>News</title>
+      <item><link>https://example.org/post</link><title>Title</title></item></channel></rss>'''
+
+    async def handler(request):
+        if request.url.path == "/robots.txt":
+            return document("", status=404)
+        return document(feed, kind="application/rss+xml") if request.url.path == "/feed" else document(f"<main><p>{text}</p></main>")
+
+    async with httpx.AsyncClient(transport=transport(handler)) as client:
+        result = await NewsSourceClient(SafeNewsHttpClient(client, min_interval_seconds=0)).fetch(
+            url="https://example.org/feed", kind="rss", config={},
+        )
+    assert len(result.items[0].content) == length
+    assert result.items[0].metadata["collection_status"] == status
+    assert bool(result.warnings) == (status == "insufficient_text")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failed", [False, True])
+async def test_refetch_always_loads_article_and_does_not_reuse_previous_text(failed):
+    old_text = "Previous article fragment. " * 100
+    new_text = "Fresh article body from the source. " * 40
+    published = datetime(2026, 10, 13, tzinfo=timezone.utc)
+    item = CollectedItem(
+        "stable-guid", "https://example.org/post", "https://example.org/post", "Stable title",
+        old_text, old_text, published, published,
+        {"language": "en", "method": "rss", "collection_status": "insufficient_text", "collection_warning": "Old warning"},
+    )
+    requested = []
+
+    async def handler(request):
+        requested.append(request.url.path)
+        if request.url.path == "/robots.txt":
+            return document("", status=404)
+        return document("", status=403) if failed else document(f'<main><div class="blog-content"><p>{new_text}</p></div></main>')
+
+    async with httpx.AsyncClient(transport=transport(handler)) as client:
+        result = await NewsSourceClient(SafeNewsHttpClient(client, min_interval_seconds=0)).refetch([item])
+    assert requested.count("/post") == 1
+    refreshed = result.items[0]
+    assert refreshed.title == item.title
+    assert refreshed.external_id == item.external_id
+    assert refreshed.published_at == refreshed.updated_at == published
+    assert refreshed.metadata["language"] == "en"
+    assert refreshed.metadata["method"] == "rss"
+    assert refreshed.description == ""
+    assert refreshed.content == ("" if failed else new_text.strip())
+    assert refreshed.metadata["collection_status"] == ("fetch_failed" if failed else "ready")
+    if failed:
+        assert refreshed.metadata["collection_warning"] in result.warnings
+    else:
+        assert "collection_warning" not in refreshed.metadata
+        assert result.warnings == []
+    assert item.content == item.description == old_text
 
 
 @pytest.mark.asyncio

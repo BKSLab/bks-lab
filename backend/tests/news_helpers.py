@@ -24,7 +24,7 @@ def collected(
     external_id="one",
     url="https://example.org/one",
     title="Original title",
-    content="Source content",
+    content="Source content with useful details about the implementation and its results. " * 8,
 ):
     return {
         "external_id": external_id,

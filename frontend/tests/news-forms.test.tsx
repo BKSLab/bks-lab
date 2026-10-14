@@ -12,7 +12,7 @@ import { NewsJobProgress } from "@/components/admin/news/NewsJobProgress";
 import { NewsSettingsForm } from "@/components/admin/news/NewsSettingsForm";
 import { NewsTaxonomyManager } from "@/components/admin/news/NewsTaxonomyManager";
 import { sourceCatalogue } from "./news-catalogue-fixtures";
-import { newsCategory, newsJob, newsSettings, newsSource, newsTopic } from "./news-fixtures";
+import { newsCategory, newsDecision, newsJob, newsSettings, newsSource, newsTopic } from "./news-fixtures";
 
 beforeEach(() => { fetchMock.mockReset(); Object.values(router).forEach(fn => fn.mockReset()); vi.stubGlobal("fetch", fetchMock); });
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
@@ -132,14 +132,16 @@ describe("source discovery and saving", () => {
 
 describe("editorial actions and jobs", () => {
   it("saves decision, format and comment using the session identity", async () => {
-    fetchMock.mockResolvedValue(json({ id: 1 }));
+    fetchMock.mockResolvedValue(json(newsDecision));
     render(<NewsDecisionForm itemId={4} />);
     fireEvent.change(screen.getByLabelText("Назначение"), { target: { value: "short_news_candidate" } });
     fireEvent.change(screen.getByLabelText("Комментарий редактора"), { target: { value: " Проверить цифры " } });
-    fireEvent.click(screen.getByRole("button", { name: "В работу" }));
+    fireEvent.click(screen.getByRole("button", { name: "Добавить в план" }));
     await waitFor(() => expect(router.refresh).toHaveBeenCalledOnce());
     expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ decision: "in_work", format: "short_news_candidate", comment: "Проверить цифры" });
-    expect(screen.getByRole("status").textContent).toContain("Решение сохранено");
+    expect(screen.getByRole("status").textContent).toContain("Материал добавлен в план публикаций");
+    expect(screen.queryByRole("button", { name: "Добавить в план" })).toBeNull();
+    expect(screen.getByRole("link", { name: "Открыть план публикаций" }).getAttribute("href")).toBe("/admin/news/plan");
   });
 
   it.each([401, 422, 500])("handles status %s safely and restores the form", async status => {
@@ -157,11 +159,61 @@ describe("editorial actions and jobs", () => {
     let resolve: (value: Response) => void = () => {};
     fetchMock.mockReturnValue(new Promise<Response>(done => { resolve = done; }));
     render(<NewsDecisionForm itemId={4} />);
-    fireEvent.click(screen.getByRole("button", { name: "В работу" }));
+    fireEvent.click(screen.getByRole("button", { name: "Добавить в план" }));
     fireEvent.click(screen.getByRole("button", { name: "Отклонить" }));
     expect(fetchMock).toHaveBeenCalledOnce();
     expect((screen.getByRole("button", { name: "Отклонить" }) as HTMLButtonElement).disabled).toBe(true);
-    await act(async () => resolve(json({ id: 1 })));
+    await act(async () => resolve(json(newsDecision)));
+  });
+
+  it("adds to the plan without expanding the editorial fields", async () => {
+    fetchMock.mockResolvedValue(json({ ...newsDecision, comment: "" }));
+    const { container } = render(<NewsDecisionForm itemId={4} defaultFormat="short_news_candidate" compact />);
+    expect(container.querySelector("details")?.open).toBe(false);
+    const button = screen.getByRole("button", { name: "Добавить в план" });
+    button.focus();
+    fireEvent.click(button);
+    await screen.findByText("Материал добавлен в план публикаций.");
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Убрать из плана" }));
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/admin/news/items/4/decision");
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ decision: "in_work", format: "short_news_candidate", comment: "" });
+    expect((await axe(container)).violations).toEqual([]);
+  });
+
+  it("removes a planned item and allows adding it again with its notes preserved", async () => {
+    fetchMock.mockResolvedValueOnce(json({ ...newsDecision, id: 2, decision: "deferred" }))
+      .mockResolvedValueOnce(json({ ...newsDecision, id: 3 }));
+    render(<NewsDecisionForm itemId={4} current={newsDecision} compact />);
+    expect(screen.queryByRole("button", { name: "Добавить в план" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Убрать из плана" }));
+    await screen.findByText("Материал убран из плана публикаций.");
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ decision: "deferred", format: newsDecision.format, comment: newsDecision.comment });
+    fireEvent.click(screen.getByRole("button", { name: "Добавить в план" }));
+    await screen.findByText("Материал добавлен в план публикаций.");
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({ decision: "in_work", format: newsDecision.format, comment: newsDecision.comment });
+    expect(router.refresh).toHaveBeenCalledTimes(2);
+  });
+
+  it("saves a new format and comment for a material already in the plan", async () => {
+    fetchMock.mockResolvedValue(json({ ...newsDecision, id: 2, format: "longread_candidate", comment: "Раскрыть подробнее" }));
+    render(<NewsDecisionForm itemId={4} current={newsDecision} />);
+    fireEvent.change(screen.getByLabelText("Назначение"), { target: { value: "longread_candidate" } });
+    fireEvent.change(screen.getByLabelText("Комментарий редактора"), { target: { value: "Раскрыть подробнее" } });
+    fireEvent.click(screen.getByRole("button", { name: "Сохранить изменения в плане" }));
+    await screen.findByText("Изменения в плане сохранены.");
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ decision: "in_work", format: "longread_candidate", comment: "Раскрыть подробнее" });
+  });
+
+  it("keeps the item in the plan when removal fails", async () => {
+    fetchMock.mockResolvedValue(json({}, 500));
+    render(<NewsDecisionForm itemId={4} current={newsDecision} compact />);
+    fireEvent.click(screen.getByRole("button", { name: "Убрать из плана" }));
+    const error = await screen.findByRole("alert");
+    expect(document.activeElement).toBe(error);
+    expect(screen.queryByRole("button", { name: "Добавить в план" })).toBeNull();
+    expect((screen.getByRole("button", { name: "Убрать из плана" }) as HTMLButtonElement).disabled).toBe(false);
+    expect(router.refresh).not.toHaveBeenCalled();
   });
 
   it("polls a queued job, announces completion, and stops polling", async () => {
@@ -187,6 +239,22 @@ describe("editorial actions and jobs", () => {
     fireEvent.click(screen.getByRole("button", { name: "Обновить статус" }));
     await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
     expect(fetchMock.mock.calls.every(([url]) => url === "/api/admin/news/jobs/9")).toBe(true);
+  });
+
+  it("explains that a completed collection does not finish analysis and shows warnings", async () => {
+    const { container } = render(<NewsJobProgress jobId={9} initialJob={{ ...newsJob, kind: "collect", progress: { new_count: 2, warnings: 1, unchanged: 3 } }} />);
+    expect(screen.getAllByRole("status").some(status => status.textContent?.includes("Завершено"))).toBe(true);
+    expect(screen.getByText("Сбор завершён. Анализ материалов выполняется отдельно.")).toBeTruthy();
+    expect(screen.getByText("Предупреждений").nextElementSibling?.textContent).toBe("1");
+    expect(screen.getByText("Без изменений").nextElementSibling?.textContent).toBe("3");
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect((await axe(container)).violations).toEqual([]);
+  });
+
+  it("omits empty warning counts and collection guidance for completed analysis", () => {
+    render(<NewsJobProgress jobId={9} initialJob={{ ...newsJob, kind: "analyze", progress: { warnings: 0 } }} />);
+    expect(screen.queryByText("Сбор завершён. Анализ материалов выполняется отдельно.")).toBeNull();
+    expect(screen.queryByText("Предупреждений")).toBeNull();
   });
 
   it("queues a manual run for the selected source", async () => {

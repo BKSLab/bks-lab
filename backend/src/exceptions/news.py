@@ -23,6 +23,10 @@ class NewsValidationError(ServiceError):
     detail = "News configuration is invalid"
 
 
+class NewsInsufficientTextError(NewsValidationError):
+    detail = "Недостаточно текста для анализа. Сначала повторите сбор источника."
+
+
 class NewsDiscoveryRequiredError(ServiceError):
     status_code = 409
     detail = "Complete discovery for this URL and configuration before saving"

@@ -4,7 +4,7 @@ import argparse
 import asyncio
 from collections import Counter
 from contextvars import ContextVar
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 from pathlib import Path
@@ -12,9 +12,15 @@ import sys
 import time
 from typing import Any
 
+from src.clients.news_sources import normalize_url, prepare_collected_item
 from src.core.news_settings import NewsSettings
 from src.dependencies.news_clients import news_source_client
 from src.exceptions.news_sources import NewsSourceError
+from src.schemas.news_collection import NEWS_MIN_CONTENT_CHARS, CollectionResult
+
+AUDIT_LOOKBACK_DAYS = 3650
+QUALITY_STATUSES = ("ready", "fetch_failed", "insufficient_text")
+IDENTITY_WARNING = "Разные URL материалов имеют одинаковый canonical URL; проверьте идентичность карточек."
 
 
 def read_catalogue(value: str) -> list[dict[str, Any]]:
@@ -47,9 +53,112 @@ def audit_targets(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return list(targets.values())
 
 
+def identity_summary(batch: CollectionResult) -> dict[str, Any]:
+    """Expose canonical collisions instead of silently collapsing different source URLs."""
+    counts: Counter[str] = Counter()
+    original_urls: dict[str, set[str]] = {}
+    for item in batch.items:
+        identity = prepare_collected_item(item)["normalized_url"]
+        counts[identity] += 1
+        original_urls.setdefault(identity, set()).add(normalize_url(item.url))
+    return {
+        "repeated_identities": sum(count > 1 for count in counts.values()),
+        "collision_urls": sorted(identity for identity, urls in original_urls.items() if len(urls) > 1),
+    }
+
+
+def collection_result(batch: CollectionResult) -> dict[str, Any]:
+    """Describe extraction quality separately from a successful HTTP/discovery result."""
+    quality = dict.fromkeys(QUALITY_STATUSES, 0)
+    warnings = list(batch.warnings)
+    for item in batch.items:
+        status = item.metadata.get("collection_status")
+        enough_text = max(len(item.content), len(item.description)) >= NEWS_MIN_CONTENT_CHARS
+        if status not in QUALITY_STATUSES or (status == "ready" and not enough_text):
+            status = "ready" if enough_text else "insufficient_text"
+        quality[status] += 1
+        if item.metadata.get("collection_warning"):
+            warnings.append(item.metadata["collection_warning"])
+    identities = identity_summary(batch)
+    if identities["collision_urls"]:
+        warnings.append(IDENTITY_WARNING)
+    warnings = list(dict.fromkeys(warnings))
+    if batch.not_modified:
+        status = "not_modified"
+    elif not batch.items:
+        status = "empty"
+    elif warnings or quality["fetch_failed"] or quality["insufficient_text"]:
+        status = "degraded"
+    else:
+        status = "passed"
+    return {
+        "status": status, "count": len(batch.items), "items": [item.to_dict() for item in batch.items],
+        "warnings": warnings, "quality": quality, "not_modified": batch.not_modified, **identities,
+    }
+
+
+def compare_collections(first: CollectionResult | None, second: CollectionResult | None) -> dict[str, Any]:
+    """Compare observed identities and text versions without inferring semantic duplication."""
+    if first is None or second is None:
+        return {"status": "unavailable", "reason": "collection_failed"}
+    if first.not_modified or second.not_modified:
+        return {"status": "unavailable", "reason": "not_modified"}
+    if not first.items or not second.items:
+        return {"status": "unavailable", "reason": "empty_batch"}
+
+    def versions(batch: CollectionResult) -> dict[str, set[str]]:
+        result: dict[str, set[str]] = {}
+        for item in batch.items:
+            data = prepare_collected_item(item)
+            result.setdefault(data["normalized_url"], set()).add(data["content_hash"])
+        return result
+
+    before, after = versions(first), versions(second)
+    common = before.keys() & after.keys()
+    groups = {
+        "new": after.keys() - before.keys(),
+        "disappeared": before.keys() - after.keys(),
+        "changed": {url for url in common if before[url] != after[url]},
+        "unchanged": {url for url in common if before[url] == after[url]},
+    }
+    first_identity, second_identity = identity_summary(first), identity_summary(second)
+    collisions = sorted(set(first_identity["collision_urls"]) | set(second_identity["collision_urls"]))
+    result = {
+        "status": "ambiguous" if collisions else "compared", "common": len(common),
+        "collision_urls": collisions, "warnings": [IDENTITY_WARNING] if collisions else [],
+        "repeated_identities": {"first": first_identity["repeated_identities"], "repeat": second_identity["repeated_identities"]},
+    }
+    for name, urls in groups.items():
+        result[name] = len(urls)
+        result[f"{name}_urls"] = sorted(urls)
+    return result
+
+
+def collection_summary(results: list[dict[str, Any]]) -> dict[str, Any]:
+    """Aggregate both passes independently so discovery success cannot hide collection failures."""
+    summary: dict[str, Any] = {}
+    for name, field in (("first", "collection"), ("repeat", "repeat_collection")):
+        batches = [row[field] for row in results if field in row]
+        summary[name] = {
+            "statuses": dict(Counter(batch["status"] for batch in batches)),
+            "quality": {status: sum(batch.get("quality", {}).get(status, 0) for batch in batches) for status in QUALITY_STATUSES},
+            "warnings": sum(len(batch.get("warnings", [])) for batch in batches),
+            "repeated_identities": sum(batch.get("repeated_identities", 0) for batch in batches),
+            "collisions": sum(len(batch.get("collision_urls", [])) for batch in batches),
+        }
+    comparisons = [row["comparison"] for row in results if "comparison" in row]
+    summary["comparison"] = {
+        "statuses": dict(Counter(row["status"] for row in comparisons)),
+        **{name: sum(row.get(name, 0) for row in comparisons) for name in ("new", "disappeared", "changed", "unchanged")},
+    }
+    return summary
+
+
 async def audit(args: argparse.Namespace, entries: list[dict[str, Any]]) -> dict[str, Any]:
     """Run bounded requests, recording safe headers and short previews only."""
     settings = NewsSettings()
+    repeat_collect = getattr(args, "repeat_collect", False)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=AUDIT_LOOKBACK_DAYS)
     targets = audit_targets(entries)
     if args.only:
         selected = set(args.only.split(","))
@@ -87,6 +196,20 @@ async def audit(args: argparse.Namespace, entries: list[dict[str, Any]]) -> dict
 
         source.http.get = capture
 
+        async def collect(url: str, kind: str, known_urls: set[str]) -> tuple[CollectionResult | None, dict[str, Any]]:
+            try:
+                batch = await source.fetch(
+                    url=url, kind=kind, config={}, max_items=3, lookback_days=AUDIT_LOOKBACK_DAYS,
+                    cutoff=cutoff, known_urls=known_urls,
+                )
+                return batch, collection_result(batch)
+            except NewsSourceError as error:
+                return None, {"status": "failed", "error_code": error.code, "error": str(error), "retryable": error.retryable}
+            except TimeoutError:
+                return None, {"status": "failed", "error_code": "audit_timeout", "error": "Audit time limit exceeded"}
+            except Exception as error:
+                return None, {"status": "error", "error_code": type(error).__name__}
+
         async def run(target: dict[str, Any]) -> None:
             async with semaphore:
                 row = {**target, "requests": []}
@@ -100,14 +223,15 @@ async def audit(args: argparse.Namespace, entries: list[dict[str, Any]]) -> dict
                             row.update(status="preview", result=preview.to_dict())
                             if args.collect:
                                 stage = "collection"
-                                batch = await source.fetch(url=preview.url, kind=preview.kind, config={},
-                                                           max_items=3, lookback_days=3650)
-                                row["collection"] = {
-                                    "status": "passed",
-                                    "count": len(batch.items),
-                                    "items": [item.to_dict() for item in batch.items],
-                                    "warnings": batch.warnings,
-                                }
+                                first, row["collection"] = await collect(preview.url, preview.kind, set())
+                                if repeat_collect:
+                                    stage = "repeat_collection"
+                                    known_urls = {
+                                        normalize_url(url) for item in (first.items if first else [])
+                                        for url in (item.url, item.canonical_url)
+                                    }
+                                    second, row["repeat_collection"] = await collect(preview.url, preview.kind, known_urls)
+                                    row["comparison"] = compare_collections(first, second)
                         else:
                             response = await source.http.get(target["url"])
                             source._require_ok(response)
@@ -115,24 +239,27 @@ async def audit(args: argparse.Namespace, entries: list[dict[str, Any]]) -> dict
                 except NewsSourceError as error:
                     failure = {"status": "failed", "error_code": error.code, "error": str(error),
                                "retryable": error.retryable}
-                    if stage == "collection":
-                        row["collection"] = failure
+                    if stage in {"collection", "repeat_collection"}:
+                        row[stage] = failure
                     else:
                         row.update(failure)
                 except TimeoutError:
                     failure = {"status": "failed", "error_code": "audit_timeout", "error": "Audit time limit exceeded"}
-                    if stage == "collection":
-                        row["collection"] = failure
+                    if stage in {"collection", "repeat_collection"}:
+                        row[stage] = failure
                     else:
                         row.update(failure)
                 except Exception as error:
                     failure = {"status": "error", "error_code": type(error).__name__}
-                    if stage == "collection":
-                        row["collection"] = failure
+                    if stage in {"collection", "repeat_collection"}:
+                        row[stage] = failure
                     else:
                         row.update(failure)
                 finally:
                     current.reset(token)
+                if repeat_collect and "collection" in row:
+                    row.setdefault("repeat_collection", {"status": "skipped", "reason": "audit_timeout"})
+                    row.setdefault("comparison", {"status": "unavailable", "reason": "collection_failed"})
                 row["seconds"] = round(time.monotonic() - started, 2)
                 results.append(row)
                 print(f"{len(results)}/{len(targets)} {row['status']} "
@@ -141,11 +268,13 @@ async def audit(args: argparse.Namespace, entries: list[dict[str, Any]]) -> dict
         await asyncio.gather(*(run(target) for target in targets))
     return {
         "checked_at": datetime.now(timezone.utc).isoformat(), "catalogue_rows": len(entries),
-        "targets": len(targets), "collect": args.collect,
+        "targets": len(targets), "collect": args.collect, "repeat_collect": repeat_collect,
         "limits": {"timeout_seconds": settings.http_timeout_seconds,
                    "max_response_bytes": settings.http_max_response_bytes,
-                   "max_redirects": settings.http_max_redirects, "audit_timeout": args.timeout},
+                   "max_redirects": settings.http_max_redirects, "audit_timeout": args.timeout,
+                   "collection_items": 3, "collection_lookback_days": AUDIT_LOOKBACK_DAYS, "collection_cutoff": cutoff.isoformat()},
         "summary": dict(Counter(row.get("error_code", row["status"]) for row in results)),
+        "collection_summary": collection_summary(results),
         "results": sorted(results, key=lambda row: row["url"]),
     }
 
@@ -158,15 +287,20 @@ def main() -> None:
     parser.add_argument("--documents-dir", help="Optional temporary directory for downloaded public documents")
     parser.add_argument("--only", help="Comma-separated catalogue IDs")
     parser.add_argument("--collect", action="store_true", help="Also collect up to three items per discovered source")
+    parser.add_argument("--repeat-collect", action="store_true", help="Repeat collection without conditional headers and compare text versions (requires --collect)")
     parser.add_argument("--concurrency", type=int, choices=range(1, 6), default=5)
     parser.add_argument("--timeout", type=float, default=120)
     args = parser.parse_args()
+    if args.repeat_collect and not args.collect:
+        parser.error("--repeat-collect requires --collect")
     raw = sys.stdin.read() if args.catalogue == "-" else Path(args.catalogue).read_text(encoding="utf-8")
     report = asyncio.run(audit(args, read_catalogue(raw)))
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(report["summary"], ensure_ascii=False))
+    if args.collect:
+        print(json.dumps({"collection_summary": report["collection_summary"]}, ensure_ascii=False))
 
 
 if __name__ == "__main__":

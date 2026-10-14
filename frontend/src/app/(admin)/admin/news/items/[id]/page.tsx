@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { NewsAnalysisView } from "@/components/admin/news/NewsAnalysisView";
+import { NewsAnalysisStatus } from "@/components/admin/news/NewsAnalysisStatus";
 import { NewsDecisionForm } from "@/components/admin/news/NewsDecisionForm";
 import { NewsJobLauncher } from "@/components/admin/news/NewsJobLauncher";
 import { NewsShell } from "@/components/admin/news/NewsShell";
@@ -23,10 +24,11 @@ export default async function NewsItemPage({ params }: { params: Promise<{ id: s
     <dl className="admin-details"><dt>Источник</dt><dd><Link className="admin-link" prefetch={false} href={`/admin/news/sources/${item.source_id}`}>{item.source_name}</Link></dd><dt>Дата публикации</dt><dd>{adminDate(item.published_at, true)}{item.published_at && " UTC"}</dd><dt>Впервые найден</dt><dd>{adminDate(item.first_seen_at, true)} UTC</dd><dt>Последний обход</dt><dd>{adminDate(item.last_seen_at, true)} UTC</dd></dl>
     {item.duplicate_of_id && <p className="admin-muted">Совпадает с <Link className="admin-link" prefetch={false} href={`/admin/news/items/${item.duplicate_of_id}`}>материалом № {item.duplicate_of_id}</Link>.</p>}
     <section className="admin-section news-stack" aria-labelledby="news-analysis-heading"><h2 id="news-analysis-heading">Редакционный анализ</h2>
-      {item.analysis ? <NewsAnalysisView analysis={item.analysis} detailed /> : <p className="admin-empty">Материал ожидает анализа. Его можно запустить вручную после подключения модели.</p>}
-      <NewsJobLauncher itemId={item.id} />
+      <NewsAnalysisStatus item={item} />
+      {item.analysis && <NewsAnalysisView analysis={item.analysis} detailed />}
+      {item.analysis_state !== "insufficient_text" && <NewsJobLauncher itemId={item.id} />}
     </section>
-    <section className="admin-section news-stack" aria-labelledby="news-decision-heading"><h2 id="news-decision-heading">Решение редактора</h2><NewsDecisionForm itemId={item.id} current={item.decision} /></section>
+    <section className="admin-section news-stack" aria-labelledby="news-decision-heading"><h2 id="news-decision-heading">Решение редактора</h2><NewsDecisionForm itemId={item.id} current={item.decision} defaultFormat={item.analysis?.recommended_formats[0]} /></section>
     <section className="admin-section news-stack" aria-labelledby="news-text-heading"><h2 id="news-text-heading">Сохранённый текст</h2><p className="news-source-text">{item.content || item.excerpt || "Текст недоступен или удалён по сроку хранения. Откройте первоисточник."}</p></section>
     <section className="admin-section news-stack" aria-labelledby="news-history-heading"><h2 id="news-history-heading">История</h2>
       <details><summary>Анализы: {item.analysis_history.length}</summary><div className="news-stack">{item.analysis_history.length ? item.analysis_history.map(analysis => <section className="news-history-entry" key={analysis.id}><h3>{adminDate(analysis.created_at, true)} UTC · {analysis.model}</h3><NewsAnalysisView analysis={analysis} detailed /></section>) : <p>Анализов пока нет.</p>}</div></details>

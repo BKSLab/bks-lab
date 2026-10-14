@@ -6,6 +6,7 @@ from sqlalchemy import func, select, text, update
 from sqlalchemy.dialects.postgresql import insert
 
 from src.db.models.news_jobs import NewsJob, NewsSourceRun
+from src.db.models.news_items import NewsItem
 from src.repositories.news_base import NewsRepository
 
 QUEUE_LOCK = 721409081
@@ -13,6 +14,55 @@ SCHEDULE_LOCK = 721409082
 
 
 class NewsJobRepository(NewsRepository):
+    async def enqueue_repair(
+        self, source_id: int, item_ids: list[int], batch_size: int = 50,
+    ) -> list[NewsJob]:
+        """Atomically queue bounded repair batches, reusing an already active source repair."""
+        if not item_ids:
+            return []
+        if not 1 <= batch_size <= 200:
+            raise ValueError("Repair batch size must be between 1 and 200")
+        async with self.operation():
+            await self.db_session.execute(
+                text("SELECT pg_advisory_xact_lock(:key)"), {"key": QUEUE_LOCK}
+            )
+            existing = list(await self.db_session.scalars(
+                select(NewsJob).where(
+                    NewsJob.kind == "collect", NewsJob.source_id == source_id,
+                    NewsJob.status.in_(["queued", "running"]),
+                    NewsJob.payload.has_key("repair_item_ids"),
+                ).order_by(NewsJob.id)
+            ))
+            if existing:
+                await self.db_session.commit()
+                return existing
+            ids = sorted(set(item_ids))
+            rows = [
+                NewsJob(kind="collect", source_id=source_id,
+                        payload={"repair_item_ids": ids[start:start + batch_size]})
+                for start in range(0, len(ids), batch_size)
+            ]
+            self.db_session.add_all(rows)
+            await self.db_session.commit()
+            return rows
+
+    async def latest_analyses(self, item_ids: list[int]) -> dict[int, NewsJob]:
+        """Read the latest job for each item's current content, including explicit retries."""
+        if not item_ids:
+            return {}
+        async with self.operation():
+            rows = await self.db_session.scalars(
+                select(NewsJob)
+                .join(NewsItem, NewsJob.item_id == NewsItem.id)
+                .where(
+                    NewsItem.id.in_(item_ids), NewsJob.kind == "analyze",
+                    NewsJob.payload["content_hash"].astext == NewsItem.content_hash,
+                )
+                .distinct(NewsJob.item_id)
+                .order_by(NewsJob.item_id, NewsJob.id.desc())
+            )
+            return {row.item_id: row for row in rows}
+
     async def get(self, job_id: int) -> NewsJob | None:
         """Read safe job state; serialization deliberately excludes payload ownership."""
         async with self.operation():
@@ -30,6 +80,21 @@ class NewsJobRepository(NewsRepository):
     ) -> NewsJob:
         """Enqueue once per identity; only explicit retries revive terminal failures."""
         async with self.operation():
+            if kind == "analyze" and item_id is not None and (payload or {}).get("content_hash"):
+                # Manual repair and automatic backlog refresh must not race into two provider calls.
+                await self.db_session.execute(
+                    text("SELECT pg_advisory_xact_lock(:key)"), {"key": QUEUE_LOCK}
+                )
+                active = await self.db_session.scalar(select(NewsJob).where(
+                    NewsJob.kind == "analyze", NewsJob.item_id == item_id,
+                    NewsJob.status.in_(["queued", "running"]),
+                    NewsJob.payload["content_hash"].astext == payload["content_hash"],
+                ).order_by(NewsJob.id).limit(1))
+                if active is not None:
+                    if payload.get("force") and active.status == "queued":
+                        active.payload = {**active.payload, "force": True}
+                    await self.db_session.commit()
+                    return active
             values = dict(
                 kind=kind,
                 source_id=source_id,

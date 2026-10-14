@@ -25,9 +25,11 @@ from src.repositories.news_runs import NewsRunRepository
 from src.repositories.news_settings import NewsSettingsRepository
 from src.repositories.news_sources import NewsSourceRepository
 from src.schemas.news import NewsSettingsData
+from src.schemas.news_collection import NEWS_MIN_CONTENT_CHARS, CollectedItem
 from src.services.news_analysis import NEWS_PROMPT_VERSION, NewsAnalysisService
 
 logger = logging.getLogger(__name__)
+NEWS_COLLECTION_VERSION = "news-text-v2"
 
 
 @dataclass(frozen=True)
@@ -225,12 +227,12 @@ class NewsPipeline:
             else:
                 sources = await repositories.sources.list_active()
         started_at = self._collection_time(job)
-        if job.source_id is None:
+        if job.source_id is None and job.payload.get("scheduled_slot"):
             sources = [
                 source for source in sources
                 if self._source_is_due(source, started_at)
             ]
-        progress.update(sources_total=len(sources), sources_done=0, new=0, updated=0, unchanged=0, errors=0)
+        progress.update(sources_total=len(sources), sources_done=0, new=0, updated=0, unchanged=0, errors=0, warnings=0)
         results = await asyncio.gather(
             *(self._collect_source(source, job, owner, progress, policy, started_at) for source in sources),
             return_exceptions=True,
@@ -256,37 +258,93 @@ class NewsPipeline:
         async with self._source_gate:
             async with self._repositories() as repositories:
                 run = await repositories.runs.begin(source.id, job.id, owner_token=owner)
-            try:
-                collected = await self._collector.fetch(
-                    url=source.url, kind=source.kind, config=source.config,
-                    etag=source.etag, last_modified=source.last_modified,
-                    first_run=source.last_success_at is None,
-                    max_items=policy["max_items_per_source"],
-                    lookback_days=policy["initial_lookback_days"],
-                    max_excerpt_chars=policy["max_excerpt_chars"],
+                known_urls = await repositories.items.known_urls(source.id)
+                first_completed = (
+                    await repositories.runs.first_completed_at(source.id)
+                    if source.last_success_at is not None else None
                 )
+            try:
+                cursor = source.cursor or {}
+                cutoff = self._collection_cutoff(source, policy, first_completed)
+                current_parser = cursor.get("collection_version") == NEWS_COLLECTION_VERSION
+                repair_ids = job.payload.get("repair_item_ids")
+                if repair_ids is not None:
+                    async with self._repositories() as repositories:
+                        previous_items = await repositories.items.repair_batch(source.id, repair_ids)
+                    collected = await self._collector.refetch([
+                        CollectedItem(
+                            external_id=item.external_id, url=item.url,
+                            canonical_url=item.canonical_url or item.url, title=item.title,
+                            published_at=item.published_at, updated_at=item.updated_at,
+                            metadata=item.metadata_json or {},
+                        ) for item in previous_items
+                    ], max_excerpt_chars=policy["max_excerpt_chars"])
+                else:
+                    collected = await self._collector.fetch(
+                        url=source.url, kind=source.kind, config=source.config,
+                        etag=source.etag if current_parser else None,
+                        last_modified=source.last_modified if current_parser else None,
+                        first_run=source.last_success_at is None,
+                        cutoff=cutoff, known_urls=known_urls,
+                        max_items=policy["max_items_per_source"],
+                        lookback_days=policy["initial_lookback_days"],
+                        max_excerpt_chars=policy["max_excerpt_chars"],
+                    )
                 items = [prepare_collected_item(item) for item in collected.items]
+                if repair_ids is not None:
+                    for previous, values in zip(previous_items, items, strict=True):
+                        values["existing_item_id"] = previous.id
                 for item in items:
                     item["content"] = item["content"][:policy["max_excerpt_chars"]]
                     item["excerpt"] = item["excerpt"][:policy["max_excerpt_chars"]]
+                warnings = [
+                    item for item in items
+                    if item["metadata_json"].get("collection_status") in {"insufficient_text", "fetch_failed"}
+                    or max(len(item["content"]), len(item["excerpt"])) < NEWS_MIN_CONTENT_CHARS
+                ]
+                warning = (
+                    "Не удалось получить полный текст части материалов; проверьте предупреждения в карточках."
+                    if warnings or collected.warnings else None
+                )
                 async with self._repositories() as repositories:
                     counts = await repositories.items.ingest(
                         source.id, items,
-                        cursor={**(source.cursor or {}), "collected_at": started_at.isoformat()},
-                        etag=collected.etag,
-                        last_modified=collected.last_modified,
+                        cursor={
+                            **cursor, "collected_at": started_at.isoformat(),
+                            "initial_cutoff_at": cutoff.isoformat(),
+                            "collection_version": NEWS_COLLECTION_VERSION,
+                        },
+                        etag=collected.etag if warning is None else None,
+                        last_modified=collected.last_modified if warning is None else None,
                         job_id=job.id, owner_token=owner,
                         expected_url=source.url, expected_kind=source.kind,
                         expected_config=source.config,
+                        collection_warning=warning,
                     )
                 async with self._repositories() as repositories:
                     await repositories.runs.finish(
                         run.id, "completed", new_count=counts["new"],
                         updated_count=counts["updated"], unchanged_count=counts["unchanged"],
                         job_id=job.id, owner_token=owner,
+                        error=warning,
                     )
                 for key in ("new", "updated", "unchanged"):
                     progress[key] += counts[key]
+                progress["warnings"] += len(warnings) or int(bool(collected.warnings))
+                if repair_ids is not None and self._config.llm_configured:
+                    for item_id in counts["item_ids"]:
+                        async with self._repositories() as repositories:
+                            item = await repositories.items.get(item_id)
+                            if (
+                                item is not None and item.duplicate_of_id is None
+                                and not (item.metadata_json or {}).get("collection_warning")
+                                and max(len(item.content), len(item.excerpt)) >= NEWS_MIN_CONTENT_CHARS
+                            ):
+                                await repositories.jobs.enqueue(
+                                    "analyze", item_id=item_id,
+                                    dedupe_key=f"repair:{job.id}:{self._analysis_key(item_id, item.content_hash)}",
+                                    payload={"content_hash": item.content_hash, "force": True},
+                                )
                 return counts
             except asyncio.CancelledError:
                 with suppress(NewsRepositoryError, OSError):
@@ -327,6 +385,18 @@ class NewsPipeline:
             expected_hash = job.payload.get("content_hash")
             if expected_hash and expected_hash != item.content_hash:
                 return {"skipped": "content_changed"}
+            if (
+                not job.payload.get("force") and item.analysis is not None
+                and item.analysis.content_hash == item.content_hash
+                and item.analysis.model == self._config.llm_model
+                and item.analysis.prompt_version == NEWS_PROMPT_VERSION
+            ):
+                return {"analysis_id": item.analysis.id}
+            if max(len(item.content), len(item.excerpt)) < NEWS_MIN_CONTENT_CHARS:
+                raise NewsSourceError(
+                    "insufficient_text", "Недостаточно текста для анализа. Повторите сбор источника.",
+                    retryable=False,
+                )
             source = await repositories.sources.get(item.source_id)
             categories = await repositories.catalog.list("categories", active_only=True)
             topics = await repositories.catalog.list("topics", active_only=True)
@@ -355,6 +425,21 @@ class NewsPipeline:
 
     def _analysis_key(self, item_id: int, content_hash: str) -> str:
         return f"analysis:{item_id}:{content_hash}:{self._config.llm_model}:{NEWS_PROMPT_VERSION}"
+
+    def _collection_cutoff(
+        self, source: NewsSource, policy: dict[str, Any], first_completed: datetime | None,
+    ) -> datetime:
+        """Keep the first import boundary stable across later collections and policy changes."""
+        recorded = (source.cursor or {}).get("initial_cutoff_at")
+        if isinstance(recorded, str):
+            try:
+                cutoff = datetime.fromisoformat(recorded)
+                if cutoff.tzinfo is not None:
+                    return cutoff
+            except ValueError:
+                pass
+        initial = first_completed or source.last_success_at or self._utc_now()
+        return initial - timedelta(days=policy["initial_lookback_days"])
 
     def _collection_time(self, job: NewsJob) -> datetime:
         """Use a nominal slot so fetch duration cannot skip the next interval."""

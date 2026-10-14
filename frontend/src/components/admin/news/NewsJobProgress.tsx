@@ -16,6 +16,7 @@ const counterLabels: Record<string, string> = {
   processed: "Обработано", total: "Всего", new_count: "Новых", updated_count: "Обновлено", unchanged_count: "Без изменений",
   analyzed_count: "Проанализировано", failed_count: "С ошибкой", collected: "Собрано", analyzed: "Проанализировано",
   sources_done: "Проверено источников", new: "Новых", updated: "Обновлено", unchanged: "Без изменений", errors: "С ошибкой",
+  warnings: "Предупреждений",
 };
 
 export function discoveryFromJob(job: NewsJob): NewsDiscovery | null {
@@ -73,10 +74,11 @@ export function NewsJobProgress({ jobId, initialJob, onFinish, showLink = true, 
   }, [jobId, initialJob, attempt, router]);
 
   const status = job?.status ?? "queued";
-  const counters = Object.entries(job?.progress ?? {}).filter(([key, value]) => key in counterLabels && typeof value === "number");
+  const counters = Object.entries(job?.progress ?? {}).filter(([key, value]) => key in counterLabels && typeof value === "number" && (key !== "warnings" || value > 0));
   const preview = job && showPreview ? discoveryFromJob(job) : null;
   return <section className="news-job" aria-label={`Задание № ${jobId}`}>
     <p role="status"><strong>{job ? kindLabels[job.kind] : "Задание"} № {jobId}:</strong> {jobStatusLabels[status]}</p>
+    {job?.kind === "collect" && status === "completed" && <p className="admin-muted">Сбор завершён. Анализ материалов выполняется отдельно.</p>}
     {counters.length > 0 && <dl className="news-job-counts">{counters.map(([key, value]) => <div key={key}><dt>{counterLabels[key]}</dt><dd>{String(value)}</dd></div>)}</dl>}
     {job?.error && <p className="admin-error">{job.error}</p>}
     {status === "queued" && <p className="admin-muted">Ожидает фонового обработчика. Можно закрыть страницу и вернуться к заданию позже.</p>}

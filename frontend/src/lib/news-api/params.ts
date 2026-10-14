@@ -6,7 +6,7 @@ export const formatLabels: Record<NewsFormat, string> = {
   short_news_candidate: "Короткая новость",
 };
 export const decisionLabels: Record<NewsDecisionValue, string> = {
-  in_work: "В работе", deferred: "Отложено", rejected: "Отклонено",
+  in_work: "В плане публикаций", deferred: "Отложено", rejected: "Отклонено",
 };
 export const jobStatusLabels: Record<NewsJobStatus, string> = {
   queued: "В очереди", running: "Выполняется", completed: "Завершено", failed: "Ошибка", cancelled: "Отменено",

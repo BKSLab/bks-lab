@@ -1,4 +1,8 @@
-import type { NewsAnalysis, NewsItemDetail, NewsJob, NewsSettings, NewsSource, NewsTaxonomy } from "@/lib/news-api/types";
+import type { NewsAnalysis, NewsDecision, NewsItemDetail, NewsJob, NewsSettings, NewsSource, NewsTaxonomy } from "@/lib/news-api/types";
+
+export const newsDecision: NewsDecision = {
+  id: 1, decision: "in_work", format: "short_news_candidate", comment: "Проверить цифры", editor: "owner", created_at: "2026-10-14T08:00:00Z",
+};
 
 export const newsTopic: NewsTaxonomy = { id: 1, name: "AI Engineering", description: "Практическая разработка", active: true };
 export const newsCategory: NewsTaxonomy = { id: 2, name: "Исследования", description: "Новые результаты", active: true };
@@ -17,6 +21,7 @@ export const newsItem: NewsItemDetail = {
   id: 4, source_id: 7, source_name: "Технический блог", url: "https://example.org/article", canonical_url: null,
   title: "Проверка качества AI-агентов", excerpt: "Краткое описание", published_at: "2026-10-08T08:00:00Z", first_seen_at: "2026-10-08T08:10:00Z",
   last_seen_at: "2026-10-08T08:10:00Z", updated_at: null, status: "analyzed", duplicate_of_id: null, analysis: newsAnalysis, decision: null,
+  analysis_state: "analyzed", analysis_error: null, collection_warning: null,
   content: "Текст первоисточника", analysis_history: [newsAnalysis], decision_history: [],
 };
 export const newsJob: NewsJob = {

@@ -10,10 +10,11 @@ from sqlalchemy import func, select
 from main import app
 from src.db.models import NewsJob, NewsSource, NewsSourceCatalogueEntry
 from src.dependencies.admin import check_admin_origin, require_admin
+from src.repositories.news_analyses import NewsAnalysisRepository
 from src.repositories.news_items import NewsItemRepository
 from src.repositories.news_jobs import NewsJobRepository
 from tests.api.endpoints.test_admin import ORIGIN, admin_config as admin_config, login
-from tests.news_helpers import add_source, collected
+from tests.news_helpers import add_source, analysis_data, collected
 from scripts.seed_news import load_source_catalogue, seed_news
 
 ROUTES = [
@@ -256,6 +257,61 @@ async def test_settings_validate_timezone_schedule_weights_and_hide_credentials(
     ]
 
 
+async def test_publication_plan_preserves_material_data_without_duplicate_membership(
+    client, db_session
+):
+    source = await add_source(db_session)
+    items = NewsItemRepository(db_session)
+    material = collected()
+    item_id = (await items.ingest(source.id, [material], {}))["item_ids"][0]
+    analysis = analysis_data()
+    await NewsAnalysisRepository(db_session).save(
+        item_id, material["content_hash"], "model", "v1", analysis
+    )
+    await items.ingest(
+        source.id, [collected(external_id="two", url="https://example.org/two")], {}
+    )
+    await login(client)
+    decision = {
+        "decision": "in_work",
+        "format": "short_news_candidate",
+        "comment": "Check the figures before writing",
+    }
+    for _ in range(2):
+        response = await client.post(
+            f"/api/admin/news/items/{item_id}/decision",
+            json=decision,
+            headers=ORIGIN,
+        )
+        assert response.status_code == 200
+
+    await items.ingest(source.id, [material], {})
+    page = await client.get("/api/admin/news/items", params={"decision": "in_work"})
+    assert page.status_code == 200
+    assert page.json()["total"] == 1
+    planned = page.json()["items"][0]
+    assert planned["id"] == item_id
+    assert planned["title"] == material["title"]
+    assert planned["url"] == material["url"]
+    assert planned["source_name"] == source.name
+    assert planned["analysis"]["summary_ru"] == analysis["summary_ru"]
+    assert planned["decision"]["format"] == decision["format"]
+    assert planned["decision"]["comment"] == decision["comment"]
+
+    removed = await client.post(
+        f"/api/admin/news/items/{item_id}/decision",
+        json={**decision, "decision": "deferred"},
+        headers=ORIGIN,
+    )
+    assert removed.status_code == 200
+    page = await client.get("/api/admin/news/items", params={"decision": "in_work"})
+    assert page.json()["total"] == 0
+    detail = await client.get(f"/api/admin/news/items/{item_id}")
+    assert detail.status_code == 200
+    assert detail.json()["content"] == material["content"]
+    assert len(detail.json()["decision_history"]) == 3
+
+
 async def test_item_decisions_use_session_editor_and_remain_in_history(
     client, db_session
 ):
@@ -329,3 +385,30 @@ async def test_collect_and_reanalyze_return_durable_jobs_without_exposing_payloa
     response = await client.get(f"/api/admin/news/jobs/{reanalyze.json()['job_id']}")
     assert response.status_code == 200 and response.json()["kind"] == "analyze"
     assert not {"owner_token", "payload", "dedupe_key"} & response.json().keys()
+
+
+async def test_analysis_states_distinguish_backlog_jobs_and_insufficient_text(client, db_session):
+    source = await add_source(db_session)
+    items = NewsItemRepository(db_session)
+    item_id = (await items.ingest(source.id, [collected()], {}))["item_ids"][0]
+    short_id = (await items.ingest(source.id, [collected(
+        external_id="short", url="https://example.org/short", content="Model downloads: 12",
+    )], {}))["item_ids"][0]
+    await login(client)
+    detail_url = f"/api/admin/news/items/{item_id}"
+    assert (await client.get(detail_url)).json()["analysis_state"] == "pending"
+    short = (await client.get(f"/api/admin/news/items/{short_id}")).json()
+    assert short["analysis_state"] == "insufficient_text"
+    rejected = await client.post(f"/api/admin/news/items/{short_id}/reanalyze", headers=ORIGIN)
+    assert rejected.status_code == 422
+    queued = await client.post(f"{detail_url}/reanalyze", headers=ORIGIN)
+    assert queued.status_code == 202
+    assert (await client.get(detail_url)).json()["analysis_state"] == "queued"
+    jobs = NewsJobRepository(db_session)
+    job = await jobs.claim(owner_token="test-worker", lease_seconds=60, max_attempts=1, kinds=["analyze"])
+    assert (await client.get(detail_url)).json()["analysis_state"] == "running"
+    await jobs.fail(job.id, "test-worker", error="Ответ модели не прошёл проверку.", retry=False, max_attempts=1)
+    detail = (await client.get(detail_url)).json()
+    assert detail["analysis_state"] == "failed" and detail["analysis_error"] == "Ответ модели не прошёл проверку."
+    page = (await client.get("/api/admin/news/items")).json()
+    assert {row["analysis_state"] for row in page["items"]} == {"failed", "insufficient_text"}

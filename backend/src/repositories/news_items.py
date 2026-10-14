@@ -2,7 +2,7 @@
 
 from datetime import datetime, timezone
 
-from sqlalchemy import delete, exists, func, or_, select, text, update
+from sqlalchemy import and_, delete, exists, func, or_, select, text, update
 from sqlalchemy.orm import joinedload
 
 from src.db.models import (
@@ -16,9 +16,43 @@ from src.db.models import (
 from src.db.models.news_catalog import news_analysis_topics
 from src.exceptions.news import NewsConflictError, NewsSourceChangedError
 from src.repositories.news_base import NewsRepository
+from src.schemas.news_collection import NEWS_MIN_CONTENT_CHARS
 
 
 class NewsItemRepository(NewsRepository):
+    @staticmethod
+    def _source_url_aliases(metadata: dict | None) -> set[str]:
+        """Read normalized observation URLs retained by this repository."""
+        aliases = (metadata or {}).get("source_url_aliases", [])
+        return {url for url in aliases if isinstance(url, str)} if isinstance(aliases, list) else set()
+
+    async def ids_for_source(self, source_id: int) -> list[int]:
+        """Read retained identities for an explicitly requested repair."""
+        async with self.operation():
+            return list(await self.db_session.scalars(
+                select(NewsItem.id).where(NewsItem.source_id == source_id).order_by(NewsItem.id)
+            ))
+
+    async def repair_batch(self, source_id: int, item_ids: list[int]) -> list[NewsItem]:
+        """Read a bounded repair batch restricted to its owning source."""
+        async with self.operation():
+            return list(await self.db_session.scalars(
+                self.query().where(NewsItem.source_id == source_id, NewsItem.id.in_(item_ids[:200]))
+                .order_by(NewsItem.id)
+            ))
+
+    async def known_urls(self, source_id: int) -> set[str]:
+        """Read identities that remain eligible for updates outside the initial import window."""
+        async with self.operation():
+            rows = await self.db_session.execute(
+                select(NewsItem.url, NewsItem.normalized_url, NewsItem.metadata_json)
+                .where(NewsItem.source_id == source_id)
+            )
+            return {
+                url for original, canonical, metadata in rows
+                for url in ({original, canonical} | self._source_url_aliases(metadata))
+            }
+
     @staticmethod
     def query():
         return select(NewsItem).options(
@@ -122,16 +156,15 @@ class NewsItemRepository(NewsRepository):
             )
             if model is not None and prompt_version is not None:
                 jobs = jobs.where(
-                    NewsJob.dedupe_key
-                    == func.concat(
-                        "analysis:",
-                        NewsItem.id,
-                        ":",
-                        NewsItem.content_hash,
-                        ":",
-                        model,
-                        ":",
-                        prompt_version,
+                    or_(
+                        NewsJob.dedupe_key == func.concat(
+                            "analysis:", NewsItem.id, ":", NewsItem.content_hash,
+                            ":", model, ":", prompt_version,
+                        ),
+                        and_(
+                            NewsJob.status.in_(["queued", "running"]),
+                            NewsJob.payload["content_hash"].astext == NewsItem.content_hash,
+                        ),
                     )
                 )
             else:
@@ -143,7 +176,8 @@ class NewsItemRepository(NewsRepository):
                         .where(
                             NewsItem.status == "pending_analysis",
                             NewsItem.duplicate_of_id.is_(None),
-                            or_(NewsItem.content != "", NewsItem.excerpt != ""),
+                            func.greatest(func.length(NewsItem.content), func.length(NewsItem.excerpt))
+                            >= NEWS_MIN_CONTENT_CHARS,
                             ~exists(jobs),
                         )
                         .order_by(NewsItem.first_seen_at, NewsItem.id)
@@ -165,6 +199,7 @@ class NewsItemRepository(NewsRepository):
         expected_url: str | None = None,
         expected_kind: str | None = None,
         expected_config: dict | None = None,
+        collection_warning: str | None = None,
     ) -> dict:
         """Commit observations and source cursor together after deduplication and ownership checks."""
         async with self.operation():
@@ -207,9 +242,19 @@ class NewsItemRepository(NewsRepository):
             }
             for data in items:
                 values = {key: value for key, value in data.items() if key in fields}
-                identity = [NewsItem.normalized_url == values["normalized_url"]]
+                # Source adapters normalize these URLs while retaining meaningful query fields.
+                aliases = {values["url"]}
+                identity_urls = {values["url"], values["normalized_url"]}
+                identity = [
+                    NewsItem.normalized_url.in_(identity_urls),
+                    NewsItem.url.in_(identity_urls),
+                    *(NewsItem.metadata_json["source_url_aliases"].contains([url]) for url in identity_urls),
+                ]
                 if values.get("external_id"):
                     identity.append(NewsItem.external_id == values["external_id"])
+                existing_item_id = data.get("existing_item_id")
+                if existing_item_id is not None:
+                    identity.append(NewsItem.id == existing_item_id)
                 matches = list(
                     (
                         await self.db_session.scalars(
@@ -220,12 +265,15 @@ class NewsItemRepository(NewsRepository):
                         )
                     ).all()
                 )
+                if existing_item_id is not None and not any(row.id == existing_item_id for row in matches):
+                    continue
                 if len(matches) > 1:
                     raise NewsConflictError(
                         "Source identifiers refer to different stored items"
                     )
                 row = matches[0] if matches else None
                 if row is None:
+                    values["metadata_json"] = {**values.get("metadata_json", {}), "source_url_aliases": sorted(aliases)}
                     duplicate = await self.db_session.scalar(
                         select(NewsItem.id)
                         .where(
@@ -246,10 +294,29 @@ class NewsItemRepository(NewsRepository):
                     await self.db_session.flush()
                     counts["new"] += 1
                 else:
+                    aliases.add(row.url)
+                    aliases.update(self._source_url_aliases(row.metadata_json))
+                    incoming_metadata = values.get("metadata_json", {})
+                    incoming_length = max(len(values.get("content", "")), len(values.get("excerpt", "")))
+                    previous_length = max(len(row.content), len(row.excerpt))
+                    degraded = previous_length >= NEWS_MIN_CONTENT_CHARS and (
+                        incoming_length < NEWS_MIN_CONTENT_CHARS
+                        or incoming_metadata.get("collection_status") == "fetch_failed"
+                    )
+                    if degraded:
+                        # A failed fetch is not an editorial revision. Preserve the last usable text.
+                        for key in ("title", "excerpt", "content", "content_hash", "canonical_url", "normalized_url"):
+                            values[key] = getattr(row, key)
+                        values["metadata_json"] = {
+                            **(row.metadata_json or {}),
+                            "collection_status": "ready",
+                            "collection_warning": "Не удалось обновить текст; сохранена предыдущая версия.",
+                        }
+                    values["metadata_json"] = {**values.get("metadata_json", {}), "source_url_aliases": sorted(aliases)}
                     changed = row.content_hash != values["content_hash"]
                     if row.external_id:
                         values.pop("external_id", None)
-                    if not changed:
+                    if not changed and existing_item_id is None:
                         # Preserve text retention and the analysis when only metadata changes.
                         for key in ("title", "excerpt", "content", "content_hash"):
                             values.pop(key, None)
@@ -279,8 +346,8 @@ class NewsItemRepository(NewsRepository):
             )
             source.last_success_at, source.last_error, source.health = (
                 now,
-                None,
-                "healthy",
+                collection_warning,
+                "degraded" if collection_warning else "healthy",
             )
             source.last_new_count = counts["new"]
             await self.db_session.commit()

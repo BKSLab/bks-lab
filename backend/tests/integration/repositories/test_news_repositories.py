@@ -152,7 +152,7 @@ async def test_analysis_identity_and_content_hash_prevent_stale_overwrite(db_ses
     )
     assert first.id == again.id
 
-    await items.ingest(source_id, [collected(content="Changed text")], {"v": 2})
+    await items.ingest(source_id, [collected(content="Changed text with updated implementation details. " * 8)], {"v": 2})
     assert (
         await analyses.save(
             item_id, initial["content_hash"], "other-model", "v1", analysis_data()

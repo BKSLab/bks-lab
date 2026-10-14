@@ -4,6 +4,8 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from typing import Any
 
+NEWS_MIN_CONTENT_CHARS = 200
+
 
 @dataclass(frozen=True)
 class CollectedItem:
