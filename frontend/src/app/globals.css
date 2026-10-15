@@ -389,6 +389,7 @@
     overflow-x: hidden;
     padding-inline: 0.25rem 0.75rem;
     scrollbar-gutter: stable;
+    scrollbar-color: var(--color-accent) var(--color-surface-alt);
   }
   .notes-feed-notice {
     padding-block: 0 1rem;
@@ -408,6 +409,7 @@
   @media (forced-colors: active) {
     .notes-feed-scroll {
       border: 1px solid CanvasText;
+      scrollbar-color: auto;
     }
     .note-entry:focus {
       outline-color: Highlight;
