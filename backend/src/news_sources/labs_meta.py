@@ -6,8 +6,14 @@ PROFILE = SourceProfile(
     id='labs-meta',
     url='https://ai.meta.com/blog/',
     kind='html',
-    config={'item_selector': "a._amcw[href*='/blog/']", 'title_selector': ':scope', 'link_selector': ':scope'},
-    article_selectors=('._a5ci', '._a5cq'),
+    # Featured badges share their URLs with headlines; dates belong to the card.
+    config={
+        'item_selector': 'div._amcy, div._amda',
+        'title_selector': 'a._amd2, a._amdf',
+        'link_selector': 'a._amd2, a._amdf',
+        'date_selector': 'div._amun, div._amdc > div._amdj:last-child',
+    },
+    article_selectors=('._a5ci', '._a5cq', 'div._9bhp > p._a92o._a5c-._a5w7'),
     publication_path_pattern='^/blog/.+',
     slug='labs-meta',
     name='Meta AI',
