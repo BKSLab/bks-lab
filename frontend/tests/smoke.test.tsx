@@ -54,7 +54,7 @@ describe("home page", () => {
       .toBe("/notes");
   });
 
-  it("renders complete notes in the accessible sidebar with local anchors", async () => {
+  it("renders complete notes in the accessible home section with local anchors", async () => {
     vi.mocked(getNotesFeed).mockResolvedValueOnce({ items: [
       {
         slug: "small-steps",

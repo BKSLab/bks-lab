@@ -54,14 +54,25 @@ export function NoteEntry({
         </Link>
       </Heading>
       {automatic || preview ? (
-        <p className="note-summary">{automatic ? note.excerpt.slice(0, 300) : note.excerpt}</p>
+        <p className="note-summary">
+          {automatic ? note.excerpt.slice(0, 300) : note.excerpt}
+          {originalUrl && (
+            <>
+              {" "}
+              <a
+                className="note-details"
+                href={originalUrl}
+                target="_blank"
+                rel="external noopener noreferrer"
+                aria-label={`Подробнее… ${note.title} (откроется в новой вкладке)`}
+              >
+                Подробнее…
+              </a>
+            </>
+          )}
+        </p>
       ) : (
         <ContentHtml html={note.content_html} renderAdSlot={() => null} />
-      )}
-      {originalUrl && (
-        <a className="note-details" href={originalUrl} rel="external noopener noreferrer" aria-label={`Подробнее… ${note.title}`}>
-          Подробнее…
-        </a>
       )}
       {!automatic && note.related_article && (
         <p className="note-related">
