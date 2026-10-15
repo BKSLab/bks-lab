@@ -1,19 +1,61 @@
 """PostgreSQL queue with atomic acquisition, ownership fencing and bounded retries."""
 
 from datetime import datetime, timedelta, timezone
+from urllib.parse import urlsplit
 
 from sqlalchemy import func, select, text, update
 from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.orm import joinedload
 
+from src.core.news_slugs import JOB_SLUG_MAX, job_slug_base, readable_slug
 from src.db.models.news_jobs import NewsJob, NewsSourceRun
 from src.db.models.news_items import NewsItem
+from src.db.models.news_sources import NewsSource
 from src.repositories.news_base import NewsRepository
 
 QUEUE_LOCK = 721409081
 SCHEDULE_LOCK = 721409082
+JOB_SLUG_LOCK = 721409084
 
 
 class NewsJobRepository(NewsRepository):
+    async def _new_slug(
+        self, kind: str, *, source_id: int | None = None,
+        item_id: int | None = None, payload: dict | None = None,
+        created_at: datetime | None = None,
+    ) -> str:
+        await self.db_session.execute(
+            text("SELECT pg_advisory_xact_lock(:key)"), {"key": JOB_SLUG_LOCK}
+        )
+        scope = "all-sources"
+        if source_id is not None:
+            scope = await self.db_session.scalar(select(NewsSource.slug).where(NewsSource.id == source_id)) or "source"
+        elif item_id is not None:
+            material = (await self.db_session.execute(
+                select(NewsSource.slug, NewsItem.title).join(NewsItem, NewsItem.source_id == NewsSource.id).where(NewsItem.id == item_id)
+            )).first()
+            scope = f"{material[0]}-{readable_slug(material[1], fallback='material', limit=70)}" if material else "material"
+        elif kind == "discover":
+            scope = readable_slug(urlsplit((payload or {}).get("url", "")).hostname or "source")
+        base = job_slug_base(kind, scope, created_at=created_at)
+        slug, suffix = base, 1
+        while await self.db_session.scalar(select(NewsJob.id).where(NewsJob.slug == slug)):
+            suffix += 1
+            tail = f"-{suffix}"
+            stamp, prefix = base[-17:], base[:-18]
+            scope_limit = JOB_SLUG_MAX - len(stamp) - len(tail) - 1
+            slug = f"{prefix[:scope_limit].rstrip('-')}-{stamp}{tail}"
+        return slug
+
+    async def get_by_slug(self, slug: str) -> NewsJob | None:
+        """Read queue state by its public address with source context loaded."""
+        async with self.operation():
+            return await self.db_session.scalar(
+                select(NewsJob).where(NewsJob.slug == slug).options(
+                    joinedload(NewsJob.source), joinedload(NewsJob.item).joinedload(NewsItem.source)
+                )
+            )
+
     async def enqueue_repair(
         self, source_id: int, item_ids: list[int], batch_size: int = 50,
     ) -> list[NewsJob]:
@@ -37,12 +79,16 @@ class NewsJobRepository(NewsRepository):
                 await self.db_session.commit()
                 return existing
             ids = sorted(set(item_ids))
-            rows = [
-                NewsJob(kind="collect", source_id=source_id,
-                        payload={"repair_item_ids": ids[start:start + batch_size]})
-                for start in range(0, len(ids), batch_size)
-            ]
-            self.db_session.add_all(rows)
+            rows = []
+            for start in range(0, len(ids), batch_size):
+                created_at = datetime.now(timezone.utc)
+                row = NewsJob(kind="collect", source_id=source_id,
+                              slug=await self._new_slug("collect", source_id=source_id, created_at=created_at),
+                              created_at=created_at,
+                              payload={"repair_item_ids": ids[start:start + batch_size]})
+                self.db_session.add(row)
+                await self.db_session.flush()
+                rows.append(row)
             await self.db_session.commit()
             return rows
 
@@ -95,7 +141,10 @@ class NewsJobRepository(NewsRepository):
                         active.payload = {**active.payload, "force": True}
                     await self.db_session.commit()
                     return active
+            created_at = datetime.now(timezone.utc)
             values = dict(
+                slug=await self._new_slug(kind, source_id=source_id, item_id=item_id, payload=payload, created_at=created_at),
+                created_at=created_at,
                 kind=kind,
                 source_id=source_id,
                 item_id=item_id,
@@ -145,9 +194,13 @@ class NewsJobRepository(NewsRepository):
             if not locked:
                 await self.db_session.rollback()
                 return None
+            created_at = datetime.now(timezone.utc)
+            slug = await self._new_slug("collect", created_at=created_at)
             row_id = await self.db_session.scalar(
                 insert(NewsJob)
                 .values(
+                    slug=slug,
+                    created_at=created_at,
                     kind="collect",
                     payload={"scheduled_slot": slot_key},
                     dedupe_key=f"scheduled:{slot_key}",

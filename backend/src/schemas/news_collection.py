@@ -37,6 +37,10 @@ class CollectionResult:
     url: str = ""
     kind: str = "rss"
     warnings: list[str] = field(default_factory=list)
+    skipped: list[dict[str, Any]] = field(default_factory=list)
+    http_status: int | None = None
+    limit_reached: bool = False
+    diagnostics_truncated: bool = False
 
 
 @dataclass(frozen=True)

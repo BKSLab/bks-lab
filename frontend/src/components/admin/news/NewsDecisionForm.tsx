@@ -7,8 +7,8 @@ import { decisionLabels, formatLabels } from "@/lib/news-api/params";
 import type { NewsDecision, NewsDecisionValue, NewsFormat } from "@/lib/news-api/types";
 import { NewsFeedback, useNewsMutation } from "./NewsFeedback";
 
-export function NewsDecisionForm({ itemId, current, defaultFormat = "longread_candidate", compact = false }: {
-  itemId: number; current?: NewsDecision | null; defaultFormat?: NewsFormat; compact?: boolean;
+export function NewsDecisionForm({ itemId, itemTitle, current, defaultFormat = "longread_candidate", compact = false }: {
+  itemId: number; itemTitle?: string; current?: NewsDecision | null; defaultFormat?: NewsFormat; compact?: boolean;
 }) {
   const router = useRouter();
   const id = useId();
@@ -42,7 +42,7 @@ export function NewsDecisionForm({ itemId, current, defaultFormat = "longread_ca
       <button type="submit" className="admin-button" value="rejected" disabled={mutation.pending}>Отклонить</button>
     </div>
   </>;
-  return <form onSubmit={submit} className="news-decision" aria-label={`Решение по материалу № ${itemId}`} aria-busy={mutation.pending}>
+  return <form onSubmit={submit} className="news-decision" aria-label={itemTitle ? `Решение по материалу: ${itemTitle}` : "Решение по материалу"} aria-busy={mutation.pending}>
     {decision && <p className="admin-muted">Решение: {decisionLabels[decision]}</p>}
     <div className="news-actions">
       <button type="submit" className={`admin-button${inPlan ? "" : " admin-button-primary"}`} value={inPlan ? "deferred" : "in_work"} disabled={mutation.pending}>{inPlan ? "Убрать из плана" : "Добавить в план"}</button>

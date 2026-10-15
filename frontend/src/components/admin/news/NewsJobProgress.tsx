@@ -5,18 +5,17 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { adminDate } from "@/lib/admin-api/params";
 import { newsRequest, NewsRequestError } from "@/lib/news-api/client";
-import { externalNewsUrl, jobStatusLabels } from "@/lib/news-api/params";
+import { externalNewsUrl, jobKindLabels, jobStatusLabels, newsJobTitle } from "@/lib/news-api/params";
 import type { NewsDiscovery, NewsJob } from "@/lib/news-api/types";
 import { NewsFeedback } from "./NewsFeedback";
 
 const terminal = new Set(["completed", "failed", "cancelled"]);
-const kindLabels = { collect: "Сбор материалов", discover: "Проверка источника", analyze: "Анализ материала" };
 const counterLabels: Record<string, string> = {
   sources_total: "Источников", sources_completed: "Проверено источников", sources_processed: "Проверено источников",
   processed: "Обработано", total: "Всего", new_count: "Новых", updated_count: "Обновлено", unchanged_count: "Без изменений",
   analyzed_count: "Проанализировано", failed_count: "С ошибкой", collected: "Собрано", analyzed: "Проанализировано",
   sources_done: "Проверено источников", new: "Новых", updated: "Обновлено", unchanged: "Без изменений", errors: "С ошибкой",
-  warnings: "Предупреждений",
+  warnings: "Предупреждений", skipped_count: "Пропущено", warning_count: "Предупреждений", skipped: "Пропущено",
 };
 
 export function discoveryFromJob(job: NewsJob): NewsDiscovery | null {
@@ -40,8 +39,8 @@ export function NewsDiscoveryPreview({ preview }: { preview: NewsDiscovery }) {
   </section>;
 }
 
-export function NewsJobProgress({ jobId, initialJob, onFinish, showLink = true, showPreview = false }: {
-  jobId: number; initialJob?: NewsJob; onFinish?: (job: NewsJob) => void; showLink?: boolean; showPreview?: boolean;
+export function NewsJobProgress({ jobSlug, initialJob, onFinish, showLink = true, showPreview = false, polling = true }: {
+  jobSlug: string; initialJob?: NewsJob; onFinish?: (job: NewsJob) => void; showLink?: boolean; showPreview?: boolean; polling?: boolean;
 }) {
   const router = useRouter();
   const [job, setJob] = useState<NewsJob | undefined>(initialJob);
@@ -51,12 +50,12 @@ export function NewsJobProgress({ jobId, initialJob, onFinish, showLink = true, 
   useEffect(() => { finishRef.current = onFinish; }, [onFinish]);
 
   useEffect(() => {
-    if (initialJob && terminal.has(initialJob.status)) return;
+    if (!polling || (initialJob && terminal.has(initialJob.status))) return;
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined;
     async function poll() {
       try {
-        const next = await newsRequest<NewsJob>(`/jobs/${jobId}`, { signal: controller.signal });
+        const next = await newsRequest<NewsJob>(`/jobs/${jobSlug}`, { signal: controller.signal });
         if (controller.signal.aborted) return;
         setJob(next); setError("");
         if (terminal.has(next.status)) finishRef.current?.(next);
@@ -71,21 +70,23 @@ export function NewsJobProgress({ jobId, initialJob, onFinish, showLink = true, 
     }
     void poll();
     return () => { controller.abort(); clearTimeout(timer); };
-  }, [jobId, initialJob, attempt, router]);
+  }, [jobSlug, initialJob, attempt, router, polling]);
 
-  const status = job?.status ?? "queued";
-  const counters = Object.entries(job?.progress ?? {}).filter(([key, value]) => key in counterLabels && typeof value === "number" && (key !== "warnings" || value > 0));
-  const preview = job && showPreview ? discoveryFromJob(job) : null;
-  return <section className="news-job" aria-label={`Задание № ${jobId}`}>
-    <p role="status"><strong>{job ? kindLabels[job.kind] : "Задание"} № {jobId}:</strong> {jobStatusLabels[status]}</p>
-    {job?.kind === "collect" && status === "completed" && <p className="admin-muted">Сбор завершён. Анализ материалов выполняется отдельно.</p>}
+  const currentJob = polling ? job : initialJob;
+  const status = currentJob?.status ?? "queued";
+  const counters = Object.entries(currentJob?.progress ?? {}).filter(([key, value]) => key in counterLabels && typeof value === "number" && (!["warnings", "warning_count"].includes(key) || value > 0));
+  const preview = currentJob && showPreview ? discoveryFromJob(currentJob) : null;
+  return <section className="news-job" aria-label={currentJob ? newsJobTitle(currentJob) : "Состояние задания"}>
+    <p role="status"><strong>{currentJob ? jobKindLabels[currentJob.kind] : "Задание"}:</strong> {jobStatusLabels[status]}</p>
+    {currentJob?.source_name && <p>{currentJob.source_name}</p>}
+    {currentJob?.kind === "collect" && status === "completed" && <p className="admin-muted">Сбор завершён. Анализ материалов выполняется отдельно.</p>}
     {counters.length > 0 && <dl className="news-job-counts">{counters.map(([key, value]) => <div key={key}><dt>{counterLabels[key]}</dt><dd>{String(value)}</dd></div>)}</dl>}
-    {job?.error && <p className="admin-error">{job.error}</p>}
+    {currentJob?.error && <p className="admin-error">{currentJob.error}</p>}
     {status === "queued" && <p className="admin-muted">Ожидает фонового обработчика. Можно закрыть страницу и вернуться к заданию позже.</p>}
-    {job?.heartbeat_at && status === "running" && <p className="admin-muted">Последний сигнал: {adminDate(job.heartbeat_at, true)} UTC.</p>}
+    {currentJob?.heartbeat_at && status === "running" && <p className="admin-muted">Последний сигнал: {adminDate(currentJob.heartbeat_at, true)} UTC.</p>}
     <NewsFeedback error={error} />
     {error && <button type="button" className="admin-button" onClick={() => { setError(""); setAttempt(value => value + 1); }}>Обновить статус</button>}
-    {showLink && <Link className="admin-link" href={`/admin/news/jobs/${jobId}`} prefetch={false}>Открыть задание № {jobId}</Link>}
+    {showLink && <Link className="admin-link" href={`/admin/news/jobs/${jobSlug}`} prefetch={false}>Открыть отчёт задания</Link>}
     {preview && <NewsDiscoveryPreview preview={preview} />}
   </section>;
 }

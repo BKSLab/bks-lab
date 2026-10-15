@@ -8,11 +8,13 @@ from fastapi.routing import APIRoute
 from sqlalchemy import func, select
 
 from main import app
-from src.db.models import NewsJob, NewsSource, NewsSourceCatalogueEntry
+from src.db.models import NewsJob, NewsRunItem, NewsSource, NewsSourceCatalogueEntry
 from src.dependencies.admin import check_admin_origin, require_admin
 from src.repositories.news_analyses import NewsAnalysisRepository
 from src.repositories.news_items import NewsItemRepository
 from src.repositories.news_jobs import NewsJobRepository
+from src.repositories.news_runs import NewsRunRepository
+from src.repositories.news_sources import NewsSourceRepository
 from tests.api.endpoints.test_admin import ORIGIN, admin_config as admin_config, login
 from tests.news_helpers import add_source, analysis_data, collected
 from scripts.seed_news import load_source_catalogue, seed_news
@@ -22,7 +24,8 @@ ROUTES = [
     ("GET", "/sources/catalogue"),
     ("POST", "/sources"),
     ("POST", "/sources/discover"),
-    ("PATCH", "/sources/1"),
+    ("GET", "/sources/example"),
+    ("PATCH", "/sources/example"),
     ("GET", "/topics"),
     ("POST", "/topics"),
     ("PATCH", "/topics/1"),
@@ -34,7 +37,9 @@ ROUTES = [
     ("POST", "/items/1/decision"),
     ("POST", "/items/1/reanalyze"),
     ("POST", "/jobs/collect"),
-    ("GET", "/jobs/1"),
+    ("GET", "/jobs/example-2026-10-15-140000"),
+    ("GET", "/jobs/example-2026-10-15-140000/runs"),
+    ("GET", "/jobs/example-2026-10-15-140000/items"),
     ("GET", "/runs"),
     ("GET", "/settings"),
     ("PATCH", "/settings"),
@@ -147,21 +152,21 @@ async def test_discovery_is_queued_and_source_requires_matching_completed_previe
     await complete_discovery(db_session, job_id)
     response = await client.post("/api/admin/news/sources", json=data, headers=ORIGIN)
     assert response.status_code == 201, response.text
-    source_id = response.json()["id"]
+    source_slug = response.json()["slug"]
     response = await client.patch(
-        f"/api/admin/news/sources/{source_id}", json={"active": False}, headers=ORIGIN
+        f"/api/admin/news/sources/{source_slug}", json={"active": False}, headers=ORIGIN
     )
     assert response.status_code == 200 and response.json()["active"] is False
     assert (
         await client.patch(
-            f"/api/admin/news/sources/{source_id}",
+            f"/api/admin/news/sources/{source_slug}",
             json={"url": "https://example.org/other"},
             headers=ORIGIN,
         )
     ).status_code == 409
     assert (
         await client.patch(
-            f"/api/admin/news/sources/{source_id}",
+            f"/api/admin/news/sources/{source_slug}",
             json={"config": {"item_selector": "article"}, "discovery_job_id": job_id},
             headers=ORIGIN,
         )
@@ -171,7 +176,7 @@ async def test_discovery_is_queued_and_source_requires_matching_completed_previe
 
 async def test_matching_preview_allows_changed_source_configuration(client, db_session):
     source = await add_source(db_session)
-    source_id = source.id
+    source_slug = source.slug
     await login(client)
     config = {"item_selector": "article", "title_selector": "h2", "link_selector": "a"}
     response = await client.post(
@@ -182,7 +187,7 @@ async def test_matching_preview_allows_changed_source_configuration(client, db_s
     job_id = response.json()["job_id"]
     await complete_discovery(db_session, job_id, "https://example.org/posts", "html")
     response = await client.patch(
-        f"/api/admin/news/sources/{source_id}",
+        f"/api/admin/news/sources/{source_slug}",
         json={
             "url": "https://example.org/posts",
             "kind": "html",
@@ -375,14 +380,14 @@ async def test_collect_and_reanalyze_return_durable_jobs_without_exposing_payloa
     )["item_ids"][0]
     await login(client)
     collect = await client.post(
-        "/api/admin/news/jobs/collect", json={"source_id": source_id}, headers=ORIGIN
+        "/api/admin/news/jobs/collect", json={"source_slug": source.slug}, headers=ORIGIN
     )
     reanalyze = await client.post(
         f"/api/admin/news/items/{item_id}/reanalyze", headers=ORIGIN
     )
     assert collect.status_code == reanalyze.status_code == 202
     assert await db_session.scalar(select(func.count()).select_from(NewsJob)) == 2
-    response = await client.get(f"/api/admin/news/jobs/{reanalyze.json()['job_id']}")
+    response = await client.get(f"/api/admin/news/jobs/{reanalyze.json()['job_slug']}")
     assert response.status_code == 200 and response.json()["kind"] == "analyze"
     assert not {"owner_token", "payload", "dedupe_key"} & response.json().keys()
 
@@ -412,3 +417,69 @@ async def test_analysis_states_distinguish_backlog_jobs_and_insufficient_text(cl
     assert detail["analysis_state"] == "failed" and detail["analysis_error"] == "Ответ модели не прошёл проверку."
     page = (await client.get("/api/admin/news/items")).json()
     assert {row["analysis_state"] for row in page["items"]} == {"failed", "insufficient_text"}
+
+
+async def test_job_reports_use_slugs_snapshot_sources_and_filter_observations(client, db_session):
+    source = await add_source(db_session, name="Исследования ИИ")
+    source_id, source_slug = source.id, source.slug
+    jobs, runs = NewsJobRepository(db_session), NewsRunRepository(db_session)
+    collection = await jobs.enqueue("collect", source_id=source_id)
+    run = await runs.begin(source_id, collection.id, parameters={"initial_lookback_days": 30})
+    material = collected()
+    item_id = (await NewsItemRepository(db_session).ingest(source_id, [material], {}))["item_ids"][0]
+    db_session.add_all([
+        NewsRunItem(run_id=run.id, item_id=item_id, title=material["title"], url=material["url"], content_hash=material["content_hash"], outcome="unchanged", warning="Article fetch failed.", preserved_previous=True),
+        NewsRunItem(run_id=run.id, title="Old candidate", url="https://example.org/old", outcome="skipped", reason="Outside the collection window.", stage="listing"),
+    ])
+    await db_session.commit()
+    analysis_job = await jobs.enqueue("analyze", item_id=item_id, payload={"content_hash": material["content_hash"]})
+    await runs.finish(run.id, "completed", unchanged_count=1, skipped_count=1, warning_count=1, not_modified=False, http_status=200, diagnostics_truncated=True)
+    await NewsSourceRepository(db_session).update(source_id, {"name": "Renamed source"})
+    await login(client)
+    root = f"/api/admin/news/jobs/{collection.slug}"
+    response = await client.get(root)
+    assert response.status_code == 200 and response.json()["source_slug"] == source_slug
+    assert response.json()["source_name"] == "Renamed source"
+    assert not {"owner_token", "payload", "dedupe_key"} & response.json().keys()
+    response = await client.get(f"{root}/runs")
+    assert response.status_code == 200 and response.headers["cache-control"] == "no-store"
+    entry = response.json()["items"][0]
+    assert entry["source_name"] == "Исследования ИИ"
+    assert entry["source_slug"] == source_slug and entry["job_slug"] == collection.slug
+    assert entry["http_status"] == 200 and entry["diagnostics_truncated"] is True
+    assert entry["parameters"] == {"initial_lookback_days": 30}
+    response = await client.get(f"{root}/items", params={"warnings_only": "true", "source_slug": source_slug})
+    assert response.status_code == 200 and response.json()["total"] == 1
+    observation = response.json()["items"][0]
+    assert observation["outcome"] == "unchanged" and observation["preserved_previous"] is True
+    assert observation["analysis_status"] == "queued" and observation["analysis_job_slug"] == analysis_job.slug
+    claimed = await jobs.claim("skipped-analysis-worker", 120, 3, kinds=["analyze"])
+    assert claimed.id == analysis_job.id
+    await jobs.complete(analysis_job.id, "skipped-analysis-worker", result={"skipped": "content_changed"})
+    response = await client.get(f"{root}/items", params={"warnings_only": "true"})
+    observation = response.json()["items"][0]
+    assert observation["analysis_status"] == "skipped"
+    assert observation["analysis_reason"] == "Версия материала изменилась до завершения анализа."
+    assert observation["analysis_job_slug"] == analysis_job.slug
+    await NewsAnalysisRepository(db_session).save(item_id, material["content_hash"], "model", "v1", analysis_data())
+    observation = (await client.get(f"{root}/items", params={"warnings_only": "true"})).json()["items"][0]
+    assert observation["analysis_status"] == "completed" and observation["analysis_reason"] is None
+    skipped = await client.get(f"{root}/items", params={"outcome": "skipped"})
+    assert skipped.json()["total"] == 1 and skipped.json()["items"][0]["analysis_status"] is None
+    assert (await client.get(f"{root}/items", params={"outcome": "other"})).status_code == 422
+    assert (await client.get(f"{root}/items", params={"page_size": 51})).status_code == 422
+    assert (await client.get("/api/admin/news/jobs/missing-job/items")).status_code == 404
+    assert (await client.get(f"/api/admin/news/jobs/{collection.id}")).status_code == 422
+    assert (await client.patch(f"/api/admin/news/sources/{source_id}", json={"active": False}, headers=ORIGIN)).status_code == 422
+    assert (await client.post("/api/admin/news/jobs/collect", json={"source_id": source_id}, headers=ORIGIN)).status_code == 422
+    assert (await client.get("/api/admin/news/items", params={"source_slug": source_slug})).json()["total"] == 1
+    source_response = await client.get(f"/api/admin/news/sources/{source_slug}")
+    assert source_response.status_code == 200 and source_response.json()["name"] == "Renamed source"
+    assert source_response.json()["slug"] == source_slug
+    assert source_response.headers["cache-control"] == "no-store"
+    assert (await client.get("/api/admin/news/sources/missing-source")).status_code == 404
+    assert (await client.get(f"/api/admin/news/sources/{source_id}")).status_code == 422
+    for reserved_name in ("New", "Catalogue", "Discover"):
+        reserved = await add_source(db_session, name=reserved_name)
+        assert reserved.slug == f"source-{reserved_name.lower()}"
+        assert (await client.get(f"/api/admin/news/sources/{reserved.slug}")).json()["name"] == reserved_name

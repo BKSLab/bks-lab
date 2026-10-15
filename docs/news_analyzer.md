@@ -5,6 +5,35 @@
 внешняя LLM, редакционные решения. Найденные материалы не публикуются
 автоматически и не изменяют Markdown сайта.
 
+## История обходов и отчёт запуска
+
+В «Запуски → История обходов» каждая строка — попытка проверки одного
+источника. Общий сбор может создать несколько строк с одним заданием.
+Переход из строки открывает существующую страницу задания
+`/admin/news/jobs/{job_slug}`: прогресс, время, параметры и отдельные
+сводки по источникам, затем постраничный список результатов.
+Фильтры выбирают источник, новые/обновлённые/неизменённые/пропущенные
+материалы и записи с предупреждениями. У записи есть исходный адрес,
+ссылка на карточку, причина, этап проблемы, признак сохранения предыдущего
+текста и состояние анализа именно наблюдавшейся версии.
+
+Снимки `news_source_runs` и `news_run_items` сохраняют результат обхода;
+название и параметры источника не меняются в старом отчёте после правок
+источника. Наблюдения записываются одной транзакцией с материалами и cursor,
+с проверкой lease. История удаляется по обычному `history_retention_days`.
+Пропущенные кандидаты не становятся редакционными материалами.
+При HTTP 304 отчёт явно показывает отсутствие изменений в источнике.
+При достижении лимита принятых материалов отмечается ограниченный объём
+проверки; пропуски записываются до 200 строк, дальнейшее усечение обозначено
+в отчёте. Количество публикаций за пределами просмотренной части неизвестно.
+
+Адреса источников и заданий используют слаги. Имя источника и дата/время
+заменяют внутренние номера в интерфейсе. Слаг источника остаётся стабильным
+при переименовании; дата слага задания всегда рассчитывается по Самаре.
+Числовые адреса и перенаправления не предусмотрены. По решению владельца
+этот выпуск устанавливается на полностью пересозданную БД;
+порядок описан в [инструкции развёртывания](deployment.md#чистая-бд-для-выпуска-со-слагами).
+
 ## Обследование перед реализацией
 
 Существующий FastAPI backend уже содержит PostgreSQL, Alembic,
@@ -121,23 +150,24 @@ cookie, Origin-проверку для изменений и запрет кэш
 
 | Метод и путь | Назначение |
 |---|---|
-| GET/POST `/sources`, PATCH `/sources/{id}` | Источники, добавление, изменение/пауза |
+| GET/POST `/sources`, GET/PATCH `/sources/{source_slug}` | Источники, добавление, изменение/пауза |
 | POST `/sources/discover` | Поставить проверку/предпросмотр в очередь (202) |
 | GET/POST `/topics`, PATCH `/topics/{id}` | Темы |
 | GET/POST `/categories`, PATCH `/categories/{id}` | Рубрики |
 | GET `/items`, GET `/items/{id}` | Подборки и карточка материала |
 | POST `/items/{id}/decision` | Редакционное решение |
 | POST `/items/{id}/reanalyze` | Повторный анализ (202) |
-| POST `/jobs/collect`, GET `/jobs/{id}` | Ручной сбор (202), прогресс/предпросмотр |
+| POST `/jobs/collect`, GET `/jobs/{job_slug}` | Ручной сбор (202), прогресс/предпросмотр |
+| GET `/jobs/{job_slug}/runs`, GET `/jobs/{job_slug}/items` | Обходы источников и результаты обработки материалов |
 | GET `/runs` | История обходов |
 | GET/PATCH `/settings` | Политика, расписание, веса и лимиты |
 
-Асинхронный ответ: `{"job_id": 1, "status": "queued"}`. Задание содержит
-`id`, `kind` (`collect`, `discover`, `analyze`), `status`, `source_id`,
+Асинхронный ответ: `{"job_id": 1, "job_slug": "all-sources-2026-10-15-080000", "status": "queued"}`. Задание содержит
+`id`, `slug`, `kind` (`collect`, `discover`, `analyze`), `status`, `source_id`, `source_slug`, `source_name`,
 `item_id`, `attempts`, `progress`, `error`, `result`, даты и heartbeat.
 Ошибки — короткие безопасные сообщения, без тел ответов провайдера.
 
-Источник: `id`, `name`, `url`, `kind` (`rss`/`html`), `config`, `active`,
+Источник: `id`, `slug`, `name`, `url`, `kind` (`rss`/`html`), `config`, `active`,
 `priority` (0–100), `trust_score` (0–100), `vendor_affiliated`,
 `interval_hours`, `topic_ids`, `category_ids`, `last_success_at`,
 `last_error`, `last_new_count`, `health`. HTML `config`: `item_selector`,
@@ -152,7 +182,7 @@ Discover принимает `url`, необязательный `kind` и `confi
 (`longread_candidate`/`short_news_candidate`), `comment` (до 2000 символов).
 Редактор всегда берётся из сессии, а не из тела запроса.
 
-Карточка списка: `id`, `source_id`, `source_name`, `url`, `canonical_url`,
+Карточка списка: `id`, `source_id`, `source_name`, `source_slug`, `url`, `canonical_url`,
 `title`, `excerpt`, `published_at`, `first_seen_at`, `last_seen_at`,
 `updated_at`, `status` (`pending_analysis`/`analyzed`), `duplicate_of_id`,
 `analysis_state` (`analyzed`/`queued`/`running`/`failed`/`insufficient_text`/`pending`),
@@ -168,7 +198,7 @@ Discover принимает `url`, необязательный `kind` и `confi
 `recommended_formats`, `confidence`, `needs_verification`, `news_score`,
 `article_score`, `model`, `prompt_version`, `created_at`.
 Подробная карточка дополнительно содержит `content`, `analysis_history`
-и `decision_history`. Фильтры: `source_id`, `category_id`, `topic_id`,
+и `decision_history`. Фильтры: `source_slug`, `category_id`, `topic_id`,
 `format`, `status`, `decision`, `min_score`, `date_from`, `date_to`, `page`.
 Без фильтра format показываются и ещё не разобранные материалы.
 

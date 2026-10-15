@@ -34,6 +34,7 @@ from src.schemas.news import (
     NewsSettingsData,
     QueuedJob,
     RunRow,
+    RunItemRow,
     SettingsPatch,
     SettingsRow,
     SourceCreate,
@@ -103,9 +104,10 @@ class NewsAdminService:
             **{
                 key: getattr(row, key)
                 for key in ItemRow.model_fields
-                if key not in {"source_name", "analysis", "decision", "analysis_state", "analysis_error", "collection_warning"}
+                if key not in {"source_name", "source_slug", "analysis", "decision", "analysis_state", "analysis_error", "collection_warning"}
             },
             source_name=row.source.name,
+            source_slug=row.source.slug,
             analysis=cls.analysis_row(row.analysis) if row.analysis else None,
             decision=DecisionRow.model_validate(row.decision) if row.decision else None,
             analysis_state=state,
@@ -117,10 +119,17 @@ class NewsAdminService:
         """Read source health and editable configuration without internal cursor state."""
         return [self.source_row(row) for row in await self.sources.list()]
 
+    async def get_source(self, source_slug: str) -> SourceRow:
+        """Read source configuration by its stable public address."""
+        source = await self.sources.get_by_slug(source_slug)
+        if source is None:
+            raise NewsNotFoundError
+        return self.source_row(source)
+
     async def discover(self, data: DiscoverRequest) -> QueuedJob:
         """Queue an SSRF-protected asynchronous preview, never fetch from the request handler."""
         job = await self.jobs.enqueue("discover", payload=data.model_dump())
-        return QueuedJob(job_id=job.id, status=job.status)
+        return QueuedJob(job_id=job.id, job_slug=job.slug, status=job.status)
 
     async def _validate_taxonomy(self, values: dict) -> None:
         for field, kind in (("topic_ids", "topics"), ("category_ids", "categories")):
@@ -157,9 +166,9 @@ class NewsAdminService:
         await self._validate_taxonomy(values)
         return self.source_row(await self.sources.create(values))
 
-    async def update_source(self, source_id: int, data: SourcePatch) -> SourceRow:
+    async def update_source(self, source_slug: str, data: SourcePatch) -> SourceRow:
         """Require a fresh matching preview for URL, adapter or selector changes."""
-        source = await self.sources.get(source_id)
+        source = await self.sources.get_by_slug(source_slug)
         if source is None:
             raise NewsNotFoundError
         values = data.model_dump(exclude_unset=True, exclude={"discovery_job_id"})
@@ -171,7 +180,7 @@ class NewsAdminService:
         if effective != expected:
             values["url"] = await self._checked_url(data.discovery_job_id, **effective)
         await self._validate_taxonomy(values)
-        row = await self.sources.update(source_id, values, expected=expected)
+        row = await self.sources.update(source.id, values, expected=expected)
         if row is None:
             raise NewsNotFoundError
         return self.source_row(row)
@@ -209,6 +218,12 @@ class NewsAdminService:
             and filters["date_from"] > filters["date_to"]
         ):
             raise NewsValidationError
+        source_slug = filters.pop("source_slug", None)
+        if source_slug is not None:
+            source = await self.sources.get_by_slug(source_slug)
+            if source is None:
+                raise NewsNotFoundError
+            filters["source_id"] = source.id
         rows, total = await self.items.list_page(
             page=page, page_size=page_size, **filters
         )
@@ -255,42 +270,88 @@ class NewsAdminService:
             item_id=item_id,
             payload={"content_hash": item.content_hash, "force": True},
         )
-        return QueuedJob(job_id=job.id, status=job.status)
+        return QueuedJob(job_id=job.id, job_slug=job.slug, status=job.status)
 
     async def collect(self, data: CollectRequest) -> QueuedJob:
         """Queue a collection run with an optional existing source scope."""
-        if (
-            data.source_id is not None
-            and await self.sources.get(data.source_id) is None
-        ):
+        source = await self.sources.get_by_slug(data.source_slug) if data.source_slug is not None else None
+        if data.source_slug is not None and source is None:
             raise NewsNotFoundError
-        job = await self.jobs.enqueue("collect", source_id=data.source_id)
-        return QueuedJob(job_id=job.id, status=job.status)
+        job = await self.jobs.enqueue("collect", source_id=source.id if source else None)
+        return QueuedJob(job_id=job.id, job_slug=job.slug, status=job.status)
 
-    async def get_job(self, job_id: int) -> JobRow:
+    async def get_job(self, job_slug: str) -> JobRow:
         """Read progress without exposing lease ownership or request internals."""
-        job = await self.jobs.get(job_id)
+        job = await self.jobs.get_by_slug(job_slug)
         if job is None:
             raise NewsNotFoundError
-        return JobRow.model_validate(job)
+        source = job.source or (job.item.source if job.item else None)
+        return JobRow(
+            **{key: getattr(job, key) for key in JobRow.model_fields if key not in {"source_name", "source_slug"}},
+            source_name=source.name if source else None,
+            source_slug=source.slug if source else None,
+        )
+
+    @staticmethod
+    def run_row(row: Any) -> RunRow:
+        return RunRow(
+            **{key: getattr(row, key) for key in RunRow.model_fields if key != "job_slug"},
+            job_slug=row.job.slug if row.job else None,
+        )
 
     async def list_runs(
-        self, *, page: int, page_size: int, source_id: int | None
+        self, *, page: int, page_size: int, source_slug: str | None = None
     ) -> Paged[RunRow]:
         """Read collection outcomes and bounded safe error summaries."""
-        rows, total = await self.runs.list_page(page, page_size, source_id)
-        items = [
-            RunRow(
-                **{
-                    key: getattr(row, key)
-                    for key in RunRow.model_fields
-                    if key != "source_name"
-                },
-                source_name=row.source.name,
-            )
-            for row in rows
-        ]
-        return Paged[RunRow].build(items, total, page, page_size)
+        rows, total = await self.runs.list_page(page, page_size, source_slug=source_slug)
+        return Paged[RunRow].build([self.run_row(row) for row in rows], total, page, page_size)
+
+    async def list_job_runs(
+        self, job_slug: str, *, page: int, page_size: int,
+    ) -> Paged[RunRow]:
+        """Read source attempts belonging to one job address."""
+        job = await self.jobs.get_by_slug(job_slug)
+        if job is None:
+            raise NewsNotFoundError
+        rows, total = await self.runs.list_page(page, page_size, job_id=job.id)
+        return Paged[RunRow].build([self.run_row(row) for row in rows], total, page, page_size)
+
+    async def list_job_items(
+        self, job_slug: str, *, page: int, page_size: int,
+        outcome: str | None = None, warnings_only: bool = False,
+        source_slug: str | None = None,
+    ) -> Paged[RunItemRow]:
+        """Read historical observations without borrowing analysis from a newer item version."""
+        job = await self.jobs.get_by_slug(job_slug)
+        if job is None:
+            raise NewsNotFoundError
+        rows, total = await self.runs.list_items(
+            job.id, page=page, page_size=page_size, outcome=outcome,
+            warnings_only=warnings_only, source_slug=source_slug,
+        )
+        result = []
+        derived = {"source_name", "source_slug", "analysis_status", "analysis_reason", "analysis_job_slug"}
+        for row, analysis_job, analyzed in rows:
+            status, reason = None, None
+            if row.item_id is not None and row.outcome != "skipped":
+                status = analysis_job.status if analysis_job else ("completed" if analyzed else "pending")
+                if status == "completed" and not analyzed:
+                    status = "skipped"
+                    reason = {
+                        "content_changed": "Версия материала изменилась до завершения анализа.",
+                        "missing_or_duplicate": "Материал удалён или отмечен как дубликат.",
+                    }.get(
+                        (analysis_job.result or {}).get("skipped"),
+                        "Задание завершено без сохранённого анализа этой версии.",
+                    )
+            result.append(RunItemRow(
+                **{key: getattr(row, key) for key in RunItemRow.model_fields if key not in derived},
+                source_name=row.run.source_name, source_slug=row.run.source_slug,
+                analysis_status=status,
+                analysis_reason=reason,
+                analysis_job_slug=analysis_job.slug if status is not None and analysis_job else None,
+            ))
+        return Paged[RunItemRow].build(result, total, page, page_size)
 
     async def get_settings(self) -> SettingsRow:
         """Combine environment defaults and editorial overrides, exposing only LLM readiness."""

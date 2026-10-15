@@ -9,7 +9,7 @@ export function NewsSourceToggle({ source }: { source: NewsSource }) {
   const mutation = useNewsMutation();
   return <div>
     <button className="admin-button" type="button" disabled={mutation.pending} aria-label={`${source.active ? "Приостановить" : "Включить"} источник ${source.name}`} onClick={async () => {
-      const result = await mutation.run(`/sources/${source.id}`, { active: !source.active }, "PATCH");
+      const result = await mutation.run(`/sources/${source.slug}`, { active: !source.active }, "PATCH");
       if (result) { mutation.setMessage(source.active ? "Источник приостановлен." : "Источник включён."); router.refresh(); }
     }}>{source.active ? "Приостановить" : "Включить"}</button>
     <NewsFeedback {...mutation} />

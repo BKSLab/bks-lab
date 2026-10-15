@@ -21,6 +21,7 @@ export interface NewsTaxonomy {
 
 export interface NewsSource {
   id: number;
+  slug: string;
   name: string;
   url: string;
   kind: "rss" | "html";
@@ -70,6 +71,7 @@ export interface NewsDecision {
 export interface NewsItem {
   id: number;
   source_id: number;
+  source_slug: string;
   source_name: string;
   url: string;
   canonical_url: string | null;
@@ -94,16 +96,19 @@ export interface NewsItemDetail extends NewsItem {
   decision_history: NewsDecision[];
 }
 
-export interface NewsJobAccepted { job_id: number; status: NewsJobStatus }
+export interface NewsJobAccepted { job_id: number; job_slug: string; status: NewsJobStatus }
 
 export interface NewsPreviewItem { title: string; url: string; published_at: string | null; excerpt?: string }
 export interface NewsDiscovery { kind: "rss" | "html"; url: string; items: NewsPreviewItem[]; warnings: string[] }
 
 export interface NewsJob {
   id: number;
+  slug: string;
   kind: "collect" | "discover" | "analyze";
   status: NewsJobStatus;
   source_id: number | null;
+  source_slug: string | null;
+  source_name: string | null;
   item_id: number | null;
   attempts: number;
   progress: Record<string, unknown>;
@@ -119,14 +124,45 @@ export interface NewsRun {
   id: number;
   source_id: number;
   source_name: string;
+  source_slug: string;
+  source_url: string;
+  source_kind: "rss" | "html";
   job_id: number | null;
+  job_slug: string | null;
   status: "running" | "completed" | "failed";
   started_at: string;
   completed_at: string | null;
   new_count: number;
   updated_count: number;
   unchanged_count: number;
+  skipped_count: number;
+  warning_count: number;
+  parameters: Record<string, unknown>;
+  not_modified: boolean;
+  http_status: number | null;
+  limit_reached: boolean;
+  diagnostics_truncated: boolean;
   error: string | null;
+}
+
+export type NewsRunOutcome = "new" | "updated" | "unchanged" | "skipped";
+
+export interface NewsRunItem {
+  id: number;
+  run_id: number;
+  source_name: string;
+  source_slug: string;
+  item_id: number | null;
+  title: string;
+  url: string | null;
+  outcome: NewsRunOutcome;
+  reason: string | null;
+  warning: string | null;
+  stage: string | null;
+  preserved_previous: boolean;
+  analysis_status: NewsJobStatus | "pending" | "skipped" | null;
+  analysis_reason: string | null;
+  analysis_job_slug: string | null;
 }
 
 export interface NewsSettings {

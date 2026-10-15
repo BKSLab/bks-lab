@@ -14,10 +14,11 @@ from src.db.models.news_source_catalogue import NewsSourceCatalogueEntry
 from src.db.models.news_items import NewsItem
 from src.db.models.news_analyses import NewsAnalysis, NewsEditorialDecision
 from src.db.models.news_jobs import NewsJob, NewsSourceRun
+from src.db.models.news_run_items import NewsRunItem
 from src.db.models.news_settings import NewsSetting
 
 __all__ = [
     "Base", "AdminSession", "ContentItem", "ContentRevision", "MediaFile", "PageView", "Subscriber", "FeedbackMessage", "NewsCategory",
     "NewsTopic", "NewsSource", "NewsSourceCatalogueEntry", "NewsItem", "NewsAnalysis", "NewsEditorialDecision",
-    "NewsJob", "NewsSourceRun", "NewsSetting",
+    "NewsJob", "NewsSourceRun", "NewsRunItem", "NewsSetting",
 ]

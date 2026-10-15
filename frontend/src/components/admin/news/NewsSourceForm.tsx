@@ -34,7 +34,7 @@ export function NewsSourceForm({ source, topics, categories, catalogueEntry, cat
   const [selectors, setSelectors] = useState(source?.config ?? {});
   const [vendor, setVendor] = useState(source?.vendor_affiliated ?? suggestion?.vendor ?? false);
   const [checking, setChecking] = useState(false);
-  const [jobId, setJobId] = useState<number | null>(null);
+  const [jobSlug, setJobSlug] = useState<string | null>(null);
   const [preview, setPreview] = useState<NewsDiscovery | null>(null);
   const [verified, setVerified] = useState<{ key: string; jobId: number } | null>(null);
   const config = kind === "html" ? Object.fromEntries(Object.entries(selectors).filter(([, value]) => value.trim()).map(([key, value]) => [key, value.trim()])) : {};
@@ -47,7 +47,7 @@ export function NewsSourceForm({ source, topics, categories, catalogueEntry, cat
     if (!externalNewsUrl(url.trim()) || new URL(url.trim()).hash) { mutation.setError("Укажите полный адрес источника с http:// или https:// без логина, пароля и фрагмента после #."); return; }
     setVerified(null); setPreview(null);
     const result = await mutation.run<NewsJobAccepted>("/sources/discover", { url: url.trim(), ...(kind !== "auto" ? { kind } : {}), config });
-    if (result) { setJobId(result.job_id); setChecking(true); }
+    if (result) { setJobSlug(result.job_slug); setChecking(true); }
   }
 
   async function save(event: FormEvent<HTMLFormElement>) {
@@ -56,7 +56,7 @@ export function NewsSourceForm({ source, topics, categories, catalogueEntry, cat
     if (!name.trim() || !externalNewsUrl(url.trim())) { mutation.setError("Заполните название и корректный адрес источника."); return; }
     if (!unchanged && !validProof) { mutation.setError("Сначала проверьте текущий адрес и настройки источника."); return; }
     const data = new FormData(event.currentTarget);
-    const result = await mutation.run<NewsSource>(source ? `/sources/${source.id}` : "/sources", {
+    const result = await mutation.run<NewsSource>(source ? `/sources/${source.slug}` : "/sources", {
       name: name.trim(), url: url.trim(), kind, config,
       active: data.has("active"), vendor_affiliated: vendor,
       priority: Number(data.get("priority")), trust_score: Number(data.get("trust_score")), interval_hours: Number(data.get("interval_hours")),
@@ -71,7 +71,7 @@ export function NewsSourceForm({ source, topics, categories, catalogueEntry, cat
       setSelectedCatalogueId(event.target.value);
       const selected = sourceCatalogue.find(entry => entry.id === event.target.value && ["rss", "auto"].includes(entry.mode));
       if (!selected) return;
-      setName(selected.name); setUrl(selected.feedUrl ?? selected.url); setKind(selected.mode === "rss" ? "rss" : "auto"); setSelectors({}); setVendor(selected.vendor); setVerified(null); setPreview(null); setJobId(null); mutation.setMessage(""); mutation.setError("");
+      setName(selected.name); setUrl(selected.feedUrl ?? selected.url); setKind(selected.mode === "rss" ? "rss" : "auto"); setSelectors({}); setVendor(selected.vendor); setVerified(null); setPreview(null); setJobSlug(null); mutation.setMessage(""); mutation.setError("");
     }}><option value="">Свой источник</option>{sourceGroups.map(group => <optgroup key={group.id} label={group.title}>{sourceCatalogue.filter(entry => entry.group === group.id && ["rss", "auto"].includes(entry.mode)).map(entry => <option value={entry.id} key={entry.id}>{entry.name}{entry.priority ? ` · ${entry.priority}` : ""}</option>)}</optgroup>)}</select><p className="admin-muted">Здесь доступны RSS и страницы публикаций из полного каталога. Каждый источник нужно проверить перед сохранением.</p></div>}
     <div className="news-fields-two">
       <div className="admin-field"><label htmlFor="news-source-name">Название (обязательно)</label><input id="news-source-name" value={name} onChange={event => setName(event.target.value)} maxLength={200} required disabled={mutation.pending} /></div>
@@ -82,7 +82,7 @@ export function NewsSourceForm({ source, topics, categories, catalogueEntry, cat
       {selectorFields.map(([field, label, placeholder]) => <div className="admin-field" key={field}><label htmlFor={`news-${field}`}>{label}</label><input id={`news-${field}`} value={selectors[field] ?? ""} onChange={event => setSelectors(value => ({ ...value, [field]: event.target.value }))} placeholder={placeholder} maxLength={500} disabled={checking || mutation.pending} /></div>)}
     </div></fieldset>}
     <div className="news-stack"><div><button type="button" className="admin-button" onClick={discover} disabled={checking || mutation.pending}>{checking ? "Проверяем источник…" : "Проверить источник"}</button></div>
-      {jobId && <NewsJobProgress key={jobId} jobId={jobId} onFinish={job => {
+      {jobSlug && <NewsJobProgress key={jobSlug} jobSlug={jobSlug} onFinish={job => {
         setChecking(false);
         const result = discoveryFromJob(job);
         if (result) {

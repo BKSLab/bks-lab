@@ -60,6 +60,7 @@ describe("complete source catalogue", () => {
     render(<NewsSourceCatalogue catalogue={sourceCatalogue} sources={[{ ...newsSource, url: "https://simonwillison.net/atom/entries", active }]} />);
     fireEvent.change(screen.getByLabelText("Поиск по названию, адресу и описанию"), { target: { value: "Simon Willison" } });
     expect(screen.getAllByRole("link", { name: "Настроить источник: Simon Willison" })).toHaveLength(2);
+    expect(screen.getAllByRole("link", { name: "Настроить источник: Simon Willison" }).every(link => link.getAttribute("href") === `/admin/news/sources/${newsSource.slug}`)).toBe(true);
     expect(screen.getAllByText(active ? "Подключён" : "На паузе")).toHaveLength(2);
     expect(screen.queryByRole("link", { name: "Проверить и подключить: Simon Willison" })).toBeNull();
   });

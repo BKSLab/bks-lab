@@ -57,7 +57,7 @@ export function NewsSourceCatalogue({ sources, catalogue: sourceCatalogue }: { s
           <details className="news-catalogue-addresses"><summary>Адреса источника ({urls.length})</summary><ul>{urls.map(url => <li key={url}><a className="admin-link" href={url} target="_blank" rel="noopener noreferrer">{url}{" "}<span className="sr-only">(в новой вкладке)</span></a></li>)}</ul></details>
         </div>
         <div className="news-stack news-catalogue-actions">
-          {existing ? <><span className="admin-status">{existing.active ? "Подключён" : "На паузе"}</span><Link className="admin-button" prefetch={false} href={`/admin/news/sources/${existing.id}`} aria-label={`Настроить источник: ${entry.name}`}>Настроить источник</Link></>
+          {existing ? <><span className="admin-status">{existing.active ? "Подключён" : "На паузе"}</span><Link className="admin-button" prefetch={false} href={`/admin/news/sources/${existing.slug}`} aria-label={`Настроить источник: ${entry.name}`}>Настроить источник</Link></>
             : canCollect ? <><Link className="admin-button" prefetch={false} href={`/admin/news/sources/new?catalogue=${encodeURIComponent(entry.id)}`} aria-label={`Проверить и подключить: ${entry.name}`}>Проверить и подключить</Link><p className="admin-muted">Сначала предпросмотр, затем сохранение и включение сбора.</p></>
               : <p className="admin-muted">{entry.mode === "api" ? "Подключение этого API пока не поддерживается. Условия доступа и документация — на сайте источника." : "Ресурс для чтения или выбора ленты. Откройте сайт; регулярный сбор здесь не настроен."}</p>}
         </div>

@@ -232,7 +232,7 @@ class NewsPipeline:
                 source for source in sources
                 if self._source_is_due(source, started_at)
             ]
-        progress.update(sources_total=len(sources), sources_done=0, new=0, updated=0, unchanged=0, errors=0, warnings=0)
+        progress.update(sources_total=len(sources), sources_done=0, new=0, updated=0, unchanged=0, skipped=0, errors=0, warnings=0)
         results = await asyncio.gather(
             *(self._collect_source(source, job, owner, progress, policy, started_at) for source in sources),
             return_exceptions=True,
@@ -257,17 +257,29 @@ class NewsPipeline:
     ) -> dict[str, Any]:
         async with self._source_gate:
             async with self._repositories() as repositories:
-                run = await repositories.runs.begin(source.id, job.id, owner_token=owner)
                 known_urls = await repositories.items.known_urls(source.id)
                 first_completed = (
                     await repositories.runs.first_completed_at(source.id)
                     if source.last_success_at is not None else None
                 )
-            try:
                 cursor = source.cursor or {}
                 cutoff = self._collection_cutoff(source, policy, first_completed)
                 current_parser = cursor.get("collection_version") == NEWS_COLLECTION_VERSION
                 repair_ids = job.payload.get("repair_item_ids")
+                run = await repositories.runs.begin(
+                    source.id, job.id, owner_token=owner,
+                    parameters={
+                        "cutoff": cutoff.isoformat(),
+                        "initial_lookback_days": policy["initial_lookback_days"],
+                        "max_items_per_source": policy["max_items_per_source"],
+                        "max_excerpt_chars": policy["max_excerpt_chars"],
+                        "first_run": source.last_success_at is None,
+                        "conditional_request": bool(current_parser and (source.etag or source.last_modified)),
+                        "mode": "repair" if repair_ids is not None else "collect",
+                        "trigger": "scheduled" if job.payload.get("scheduled_slot") else "manual",
+                    },
+                )
+            try:
                 if repair_ids is not None:
                     async with self._repositories() as repositories:
                         previous_items = await repositories.items.repair_batch(source.id, repair_ids)
@@ -320,17 +332,18 @@ class NewsPipeline:
                         expected_url=source.url, expected_kind=source.kind,
                         expected_config=source.config,
                         collection_warning=warning,
-                    )
-                async with self._repositories() as repositories:
-                    await repositories.runs.finish(
-                        run.id, "completed", new_count=counts["new"],
-                        updated_count=counts["updated"], unchanged_count=counts["unchanged"],
-                        job_id=job.id, owner_token=owner,
-                        error=warning,
+                        run_id=run.id, skipped=collected.skipped,
+                        run_diagnostics={
+                            "warning_count": len(warnings) or int(bool(collected.warnings)),
+                            "http_status": collected.http_status, "not_modified": collected.not_modified,
+                            "limit_reached": collected.limit_reached,
+                            "diagnostics_truncated": collected.diagnostics_truncated,
+                        },
                     )
                 for key in ("new", "updated", "unchanged"):
                     progress[key] += counts[key]
                 progress["warnings"] += len(warnings) or int(bool(collected.warnings))
+                progress["skipped"] += len(collected.skipped)
                 if repair_ids is not None and self._config.llm_configured:
                     for item_id in counts["item_ids"]:
                         async with self._repositories() as repositories:

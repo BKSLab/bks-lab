@@ -20,6 +20,15 @@ NewsDecision = Literal["in_work", "deferred", "rejected"]
 NewsStatus = Literal["pending_analysis", "analyzed"]
 NewsKind = Literal["rss", "html"]
 PositiveID = Annotated[int, Field(ge=1)]
+def validate_news_slug(value: str) -> str:
+    """Reject numeric record IDs as public news addresses."""
+    if re.search(r"[a-z]", value) is None:
+        raise ValueError("Use a readable news slug")
+    return value
+
+
+NewsSlug = Annotated[str, Field(min_length=1, max_length=240, pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$"), AfterValidator(validate_news_slug)]
+RunOutcome = Literal["new", "updated", "unchanged", "skipped"]
 
 
 def validate_source_url(value: str) -> str:
@@ -171,6 +180,7 @@ class SourcePatch(NewsPatch):
 
 class SourceRow(BaseModel):
     id: int
+    slug: str = Field(description="Stable readable source address.", examples=["primer-bloga"])
     name: str
     url: str
     kind: NewsKind
@@ -342,22 +352,26 @@ class SettingsRow(NewsSettingsData):
 
 
 class CollectRequest(NewsRequest):
-    source_id: PositiveID | None = Field(
+    source_slug: NewsSlug | None = Field(
         default=None, description="One source, or all active sources."
     )
 
 
 class QueuedJob(BaseModel):
     job_id: int
+    job_slug: str = Field(description="Stable job address for polling and reports.", examples=["all-sources-2026-10-15-142030"])
     status: str
 
 
 class JobRow(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: int
+    slug: str = Field(description="Stable readable job address.", examples=["example-2026-10-15-142030"])
     kind: Literal["collect", "discover", "analyze"]
     status: Literal["queued", "running", "completed", "failed", "cancelled"]
     source_id: int | None
+    source_name: str | None = Field(description="Current name of the scoped source.", examples=["Example"])
+    source_slug: str | None = Field(description="Stable source address.", examples=["example"])
     item_id: int | None
     attempts: int
     progress: dict
@@ -413,6 +427,7 @@ class ItemRow(BaseModel):
     id: int
     source_id: int
     source_name: str
+    source_slug: str = Field(description="Stable address of the owning source.", examples=["example"])
     url: str
     canonical_url: str | None
     title: str
@@ -442,11 +457,42 @@ class RunRow(BaseModel):
     id: int
     source_id: int
     source_name: str
+    source_slug: str = Field(description="Source address captured when the run began.", examples=["example"])
+    source_url: str = Field(description="Source URL captured when the run began.", examples=["https://example.org/feed.xml"])
+    source_kind: NewsKind = Field(description="Adapter captured when the run began.", examples=["rss"])
     job_id: int | None
+    job_slug: str | None = Field(description="Owning job address.", examples=["example-2026-10-15-142030"])
     status: str
     started_at: datetime
     completed_at: datetime | None
     new_count: int
     updated_count: int
     unchanged_count: int
+    skipped_count: int = Field(description="Candidates skipped during collection.", examples=[2])
+    warning_count: int = Field(description="Observations with collection warnings.", examples=[1])
+    parameters: dict = Field(description="Safe collection parameters captured for this attempt.", examples=[{}])
+    not_modified: bool = Field(description="Source responded to a conditional request with no changes.", examples=[False])
+    http_status: int | None = Field(description="Source HTTP response status if available.", examples=[200])
+    limit_reached: bool = Field(description="Configured collection limit was reached.", examples=[False])
+    diagnostics_truncated: bool = Field(description="Candidate diagnostics were capped.", examples=[False])
     error: str | None
+
+
+class RunItemRow(BaseModel):
+    """Historical collection observation with version-specific analysis state."""
+
+    id: int = Field(description="Internal observation key.", examples=[1])
+    run_id: int = Field(description="Internal source run key.", examples=[1])
+    source_name: str = Field(description="Source name captured at run start.", examples=["Example"])
+    source_slug: str = Field(description="Stable source address.", examples=["example"])
+    title: str = Field(description="Title observed during this run.", examples=["A new release"])
+    url: str | None = Field(description="Candidate URL, when valid and available.", examples=["https://example.org/release"])
+    item_id: int | None = Field(description="Retained material key, if any.", examples=[1])
+    outcome: RunOutcome = Field(description="Ingestion result for this candidate.", examples=["unchanged"])
+    reason: str | None = Field(description="Safe reason for the outcome.", examples=["Outside the collection window."])
+    warning: str | None = Field(description="Safe collection warning.", examples=["Article text could not be fetched."])
+    stage: str | None = Field(description="Stage responsible for the diagnostic.", examples=["article"])
+    preserved_previous: bool = Field(description="Earlier sufficient text was preserved.", examples=[False])
+    analysis_status: Literal["queued", "running", "completed", "failed", "cancelled", "pending", "skipped"] | None = Field(description="Analysis state for this exact observed version.", examples=["queued"])
+    analysis_reason: str | None = Field(default=None, max_length=500, description="Safe explanation when an analysis job finished without a saved result.", examples=["Версия материала изменилась до завершения анализа."])
+    analysis_job_slug: str | None = Field(description="Latest analysis job address for this version, if retained.", examples=[None])

@@ -6,6 +6,7 @@ const { router, fetchMock } = vi.hoisted(() => ({ router: { push: vi.fn(), repla
 vi.mock("next/navigation", () => ({ useRouter: () => router }));
 
 import { NewsSourceForm } from "@/components/admin/news/NewsSourceForm";
+import { NewsSourceToggle } from "@/components/admin/news/NewsSourceToggle";
 import { NewsDecisionForm } from "@/components/admin/news/NewsDecisionForm";
 import { NewsJobLauncher } from "@/components/admin/news/NewsJobLauncher";
 import { NewsJobProgress } from "@/components/admin/news/NewsJobProgress";
@@ -36,7 +37,7 @@ describe("source discovery and saving", () => {
   });
 
   it("queues discovery, previews the resolved feed, and saves its job proof with editor settings", async () => {
-    fetchMock.mockResolvedValueOnce(json({ job_id: 9, status: "queued" }, 202)).mockResolvedValueOnce(json(newsJob)).mockResolvedValueOnce(json(newsSource));
+    fetchMock.mockResolvedValueOnce(json({ job_id: 9, job_slug: newsJob.slug, status: "queued" }, 202)).mockResolvedValueOnce(json(newsJob)).mockResolvedValueOnce(json(newsSource));
     render(<NewsSourceForm catalogue={sourceCatalogue} topics={[newsTopic]} categories={[newsCategory]} />);
     fillSource();
     fireEvent.click(screen.getByLabelText("AI Engineering"));
@@ -44,7 +45,7 @@ describe("source discovery and saving", () => {
     await screen.findByRole("link", { name: "Новая публикация (в новой вкладке)" });
     expect(fetchMock.mock.calls[0][0]).toBe("/api/admin/news/sources/discover");
     expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ url: "https://example.org/", config: {} });
-    expect(fetchMock.mock.calls[1][0]).toBe("/api/admin/news/jobs/9");
+    expect(fetchMock.mock.calls[1][0]).toBe(`/api/admin/news/jobs/${newsJob.slug}`);
     expect((screen.getByLabelText("URL источника (обязательно)") as HTMLInputElement).value).toBe("https://example.org/feed.xml");
     fireEvent.click(screen.getByRole("button", { name: "Сохранить источник" }));
     await waitFor(() => expect(router.push).toHaveBeenCalledWith("/admin/news/sources"));
@@ -56,7 +57,7 @@ describe("source discovery and saving", () => {
   });
 
   it("invalidates proof after editing the discovered URL", async () => {
-    fetchMock.mockResolvedValueOnce(json({ job_id: 9, status: "queued" }, 202)).mockResolvedValueOnce(json(newsJob));
+    fetchMock.mockResolvedValueOnce(json({ job_id: 9, job_slug: newsJob.slug, status: "queued" }, 202)).mockResolvedValueOnce(json(newsJob));
     render(<NewsSourceForm catalogue={sourceCatalogue} topics={[]} categories={[]} />);
     fillSource();
     fireEvent.click(screen.getByRole("button", { name: "Проверить источник" }));
@@ -74,13 +75,14 @@ describe("source discovery and saving", () => {
     fireEvent.click(screen.getByRole("button", { name: "Сохранить источник" }));
     await waitFor(() => expect(router.push).toHaveBeenCalledWith("/admin/news/sources"));
     expect(fetchMock).toHaveBeenCalledOnce();
+    expect(fetchMock.mock.calls[0][0]).toBe(`/api/admin/news/sources/${newsSource.slug}`);
     expect(fetchMock.mock.calls[0][1].method).toBe("PATCH");
     expect(JSON.parse(fetchMock.mock.calls[0][1].body)).not.toHaveProperty("discovery_job_id");
   });
 
   it("requires rechecking HTML after selectors change", async () => {
     const htmlJob = { ...newsJob, result: { ...newsJob.result, kind: "html", url: "https://example.org/" } };
-    fetchMock.mockResolvedValueOnce(json({ job_id: 9, status: "queued" }, 202)).mockResolvedValueOnce(json(htmlJob));
+    fetchMock.mockResolvedValueOnce(json({ job_id: 9, job_slug: newsJob.slug, status: "queued" }, 202)).mockResolvedValueOnce(json(htmlJob));
     render(<NewsSourceForm catalogue={sourceCatalogue} topics={[]} categories={[]} />);
     fillSource();
     fireEvent.change(screen.getByLabelText("Способ получения"), { target: { value: "html" } });
@@ -93,6 +95,15 @@ describe("source discovery and saving", () => {
     fireEvent.click(screen.getByRole("button", { name: "Сохранить источник" }));
     expect((await screen.findByRole("alert")).textContent).toContain("Сначала проверьте");
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("toggles a source by slug and keeps its numeric ID out of the URL", async () => {
+    fetchMock.mockResolvedValue(json({ ...newsSource, active: true }));
+    render(<NewsSourceToggle source={newsSource} />);
+    fireEvent.click(screen.getByRole("button", { name: `Включить источник ${newsSource.name}` }));
+    await screen.findByText("Источник включён.");
+    expect(fetchMock.mock.calls[0][0]).toBe(`/api/admin/news/sources/${newsSource.slug}`);
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ active: true });
   });
 
   it("only prefills a catalogue suggestion, never auto-enables or saves it", () => {
@@ -116,14 +127,14 @@ describe("source discovery and saving", () => {
   });
 
   it("clears the previous discovery when another catalogue entry is selected", async () => {
-    fetchMock.mockResolvedValueOnce(json({ job_id: 9, status: "queued" }, 202)).mockResolvedValueOnce(json(newsJob));
+    fetchMock.mockResolvedValueOnce(json({ job_id: 9, job_slug: newsJob.slug, status: "queued" }, 202)).mockResolvedValueOnce(json(newsJob));
     render(<NewsSourceForm catalogue={sourceCatalogue} topics={[]} categories={[]} />);
     fillSource();
     fireEvent.click(screen.getByRole("button", { name: "Проверить источник" }));
     await screen.findByRole("link", { name: "Новая публикация (в новой вкладке)" });
     fireEvent.change(screen.getByLabelText("Подставить адрес из каталога"), { target: { value: "ru-tbank" } });
     expect(screen.queryByRole("link", { name: "Новая публикация (в новой вкладке)" })).toBeNull();
-    expect(screen.queryByRole("link", { name: "Открыть задание № 9" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "Открыть отчёт задания" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Сохранить источник" }));
     expect((await screen.findByRole("alert")).textContent).toContain("Сначала проверьте");
     expect(fetchMock).toHaveBeenCalledTimes(2);
@@ -220,7 +231,7 @@ describe("editorial actions and jobs", () => {
     vi.useFakeTimers();
     const finish = vi.fn();
     fetchMock.mockResolvedValueOnce(json({ ...newsJob, status: "running", progress: { sources_total: 2, sources_done: 1 } })).mockResolvedValueOnce(json(newsJob));
-    const { unmount } = render(<NewsJobProgress jobId={9} onFinish={finish} />);
+    const { unmount } = render(<NewsJobProgress jobSlug={newsJob.slug} onFinish={finish} />);
     await act(async () => {});
     expect(screen.getAllByRole("status").some(status => status.textContent?.includes("Выполняется"))).toBe(true);
     expect(screen.getByText("Проверено источников")).toBeTruthy();
@@ -234,15 +245,15 @@ describe("editorial actions and jobs", () => {
 
   it("retries a failed status request without starting another job", async () => {
     fetchMock.mockRejectedValueOnce(new TypeError("offline")).mockResolvedValueOnce(json(newsJob));
-    render(<NewsJobProgress jobId={9} />);
+    render(<NewsJobProgress jobSlug={newsJob.slug} />);
     expect((await screen.findByRole("alert")).textContent).toContain("Нет связи");
     fireEvent.click(screen.getByRole("button", { name: "Обновить статус" }));
     await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
-    expect(fetchMock.mock.calls.every(([url]) => url === "/api/admin/news/jobs/9")).toBe(true);
+    expect(fetchMock.mock.calls.every(([url]) => url === `/api/admin/news/jobs/${newsJob.slug}`)).toBe(true);
   });
 
   it("explains that a completed collection does not finish analysis and shows warnings", async () => {
-    const { container } = render(<NewsJobProgress jobId={9} initialJob={{ ...newsJob, kind: "collect", progress: { new_count: 2, warnings: 1, unchanged: 3 } }} />);
+    const { container } = render(<NewsJobProgress jobSlug={newsJob.slug} initialJob={{ ...newsJob, kind: "collect", progress: { new_count: 2, warnings: 1, unchanged: 3 } }} />);
     expect(screen.getAllByRole("status").some(status => status.textContent?.includes("Завершено"))).toBe(true);
     expect(screen.getByText("Сбор завершён. Анализ материалов выполняется отдельно.")).toBeTruthy();
     expect(screen.getByText("Предупреждений").nextElementSibling?.textContent).toBe("1");
@@ -252,19 +263,19 @@ describe("editorial actions and jobs", () => {
   });
 
   it("omits empty warning counts and collection guidance for completed analysis", () => {
-    render(<NewsJobProgress jobId={9} initialJob={{ ...newsJob, kind: "analyze", progress: { warnings: 0 } }} />);
+    render(<NewsJobProgress jobSlug={newsJob.slug} initialJob={{ ...newsJob, kind: "analyze", progress: { warnings: 0 } }} />);
     expect(screen.queryByText("Сбор завершён. Анализ материалов выполняется отдельно.")).toBeNull();
     expect(screen.queryByText("Предупреждений")).toBeNull();
   });
 
   it("queues a manual run for the selected source", async () => {
-    fetchMock.mockResolvedValueOnce(json({ job_id: 9, status: "queued" }, 202)).mockResolvedValueOnce(json({ ...newsJob, kind: "collect", result: {} }));
+    fetchMock.mockResolvedValueOnce(json({ job_id: 9, job_slug: newsJob.slug, status: "queued" }, 202)).mockResolvedValueOnce(json({ ...newsJob, kind: "collect", result: {} }));
     render(<NewsJobLauncher sources={[newsSource]} />);
-    fireEvent.change(screen.getByLabelText("Источник для сбора"), { target: { value: "7" } });
+    fireEvent.change(screen.getByLabelText("Источник для сбора"), { target: { value: newsSource.slug } });
     fireEvent.click(screen.getByRole("button", { name: "Проверить сейчас" }));
-    await screen.findByRole("link", { name: "Открыть задание № 9" });
+    await screen.findByRole("link", { name: "Открыть отчёт задания" });
     expect(fetchMock.mock.calls[0][0]).toBe("/api/admin/news/jobs/collect");
-    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ source_id: 7 });
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ source_slug: newsSource.slug });
   });
 });
 

@@ -248,6 +248,41 @@ docker compose --env-file backend/.env.production -f docker-compose.yml up -d --
 
 ## Резервное копирование
 
+### Чистая БД для выпуска со слагами
+
+По поручению владельца от 15.10.2026 выпуск с подробными отчётами обходов
+и слагами источников/заданий устанавливается с полной очисткой production-БД.
+Прежние данные не переносятся, числовые адреса не перенаправляются.
+Сброс является отдельным действием при выкладке, не частью миграций или
+обычного запуска приложения. Удаляется только volume PostgreSQL;
+uploads, env и сертификаты сохраняются.
+
+В каталоге production-проекта после получения проверенного кода:
+
+```bash
+docker compose --env-file backend/.env.production -f docker-compose.yml build
+docker compose --env-file backend/.env.production -f docker-compose.yml down
+docker volume inspect bks-lab-prod_pg_data --format '{{index .Labels "com.docker.compose.project"}} {{index .Labels "com.docker.compose.volume"}}'
+```
+
+Последняя команда должна показать `bks-lab-prod pg_data`. При другом
+результате сначала выяснить фактическое имя volume; удалять другие volumes
+или выполнять `down -v` для этой операции не требуется.
+
+```bash
+docker volume rm bks-lab-prod_pg_data
+docker compose --env-file backend/.env.production -f docker-compose.yml up -d --wait db backend news-analyzer-scheduler frontend nginx
+docker compose --env-file backend/.env.production -f docker-compose.yml ps
+```
+
+Backend применяет Alembic к пустой БД и запускает `scripts.seed_news`;
+seed создаёт подсказки каталога и справочники, источники подключаются заново
+через админку. После старта проверить `/api/health`, вход в админку,
+создание источника, сбор, ссылки со слагами и подробный отчёт.
+Изменения scheduler вступают в силу с пересозданием его контейнера.
+
+### Регулярные резервные копии
+
 `bash scripts/backup-database.sh` создаёт приватный custom-format `pg_dump`
 в `backups/`, проверяет читаемость `pg_restore --list` и только затем даёт
 файлу окончательное имя; рядом сохраняется архив volume `uploads`

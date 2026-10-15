@@ -478,10 +478,11 @@ UTC. Лишние поля в запросах запрещены. В PATCH пе
 | Метод и путь после `/api/admin/news` | Результат |
 |---|---|
 | GET `/sources` | 200, массив `SourceRow` |
+| GET `/sources/{source_slug}` | 200, `SourceRow` |
 | GET `/sources/catalogue` | 200, массив `SourceCatalogueEntry` из БД |
 | POST `/sources/discover` | 202, `QueuedJob` |
 | POST `/sources` | 201, `SourceRow` |
-| PATCH `/sources/{id}` | 200, `SourceRow` |
+| PATCH `/sources/{source_slug}` | 200, `SourceRow` |
 | GET `/topics`, GET `/categories` | 200, массив `CatalogRow` |
 | POST `/topics`, POST `/categories` | 201, `CatalogRow` |
 | PATCH `/topics/{id}`, PATCH `/categories/{id}` | 200, `CatalogRow` |
@@ -490,7 +491,9 @@ UTC. Лишние поля в запросах запрещены. В PATCH пе
 | POST `/items/{id}/decision` | 200, `DecisionRow` |
 | POST `/items/{id}/reanalyze` | 202, `QueuedJob` |
 | POST `/jobs/collect` | 202, `QueuedJob` |
-| GET `/jobs/{id}` | 200, `JobRow` |
+| GET `/jobs/{job_slug}` | 200, `JobRow` |
+| GET `/jobs/{job_slug}/runs` | 200, `Paged<RunRow>` |
+| GET `/jobs/{job_slug}/items` | 200, `Paged<RunItemRow>` |
 | GET `/runs` | 200, `Paged<RunRow>` |
 | GET `/settings`, PATCH `/settings` | 200, `SettingsRow` |
 
@@ -520,7 +523,7 @@ UTC. Лишние поля в запросах запрещены. В PATCH пе
 `item_selector`, `title_selector`, `link_selector`, `date_selector`,
 `content_selector`. Внешняя проверка выполняется worker-процессом.
 
-Ответ сразу: `{"job_id": 9, "status": "queued"}`. После `completed`
+Ответ сразу: `{"job_id": 9, "job_slug": "discover-source-2026-10-15-080000", "status": "queued"}`. После `completed`
 в `GET /jobs/9` поле `result` содержит `kind`, итоговый `url`, `items`
 (до пяти публикаций: `title`, `url`, `published_at`, необязательный
 `excerpt`) и `warnings`. Ошибка проверки не разрешает сохранение источника.
@@ -541,9 +544,9 @@ URL может совпадать с исходным URL проверки ил�
 в БД сохраняется найденный адрес. Изменение `url`, `kind` или `config`
 через PATCH тоже требует `discovery_job_id`; изменение названия,
 приоритета, активности или справочников не требует нового обхода.
-Пауза источника — `PATCH /sources/{id}` с `{"active": false}`.
+Пауза источника — `PATCH /sources/{source_slug}` с `{"active": false}`.
 
-`SourceRow` содержит ID, все сохранённые поля источника, `topic_ids`,
+`SourceRow` содержит внутренний ID, `slug`, все сохранённые поля источника, `topic_ids`,
 `category_ids`, `last_success_at`, `last_error`, `last_new_count`, `health`.
 В ответ не включаются внутренний cursor и параметры lease.
 `health=degraded` означает завершённый сбор с предупреждениями получения
@@ -560,7 +563,7 @@ URL может совпадать с исходным URL проверки ил�
 
 #### Подборки, анализ и решения
 
-`GET /items` поддерживает фильтры `source_id`, `category_id`, `topic_id`,
+`GET /items` поддерживает фильтры `source_slug`, `category_id`, `topic_id`,
 `format` (`longread_candidate` / `short_news_candidate`), `status`
 (`pending_analysis` / `analyzed`), `decision` (`in_work` / `deferred` /
 `rejected`), `min_score` (0–100), `date_from`, `date_to`, `page`, `page_size`.
@@ -574,7 +577,7 @@ URL может совпадать с исходным URL проверки ил�
 `news_score`; сортировка по нему убывает, null в конце. При равенстве —
 `first_seen_at desc`, затем `id desc`.
 
-`ItemRow`: `id`, `source_id`, `source_name`, `url`, `canonical_url`
+`ItemRow`: `id`, `source_id`, `source_name`, `source_slug`, `url`, `canonical_url`
 (nullable), `title`, `excerpt`, `published_at`, `first_seen_at`,
 `last_seen_at`, `updated_at`, `status`, `analysis_state`, `analysis_error`,
 `collection_warning`, `duplicate_of_id`, `analysis`
@@ -631,18 +634,25 @@ URL может совпадать с исходным URL проверки ил�
 #### Задания и история обходов
 
 `POST /jobs/collect` принимает `{}` для активных источников либо
-`{"source_id":7}` для одного источника. Длительные операции возвращают
+`{"source_slug":"hugging-face-blog"}` для одного источника. Длительные операции возвращают
 `QueuedJob` сразу; они не зависят от открытой вкладки браузера.
 Ручной запуск обходит `interval_hours`, плановый соблюдает его.
 Начальная граница импорта фиксируется в приватном cursor источника:
 неизвестные публикации старше неё не добавляются и при повторном обходе;
 обновление уже известных URL допускается.
 
-`JobRow`: `id`, `kind` (`collect` / `discover` / `analyze`), `status`
+Источники и задания адресуются только по стабильным слагам. Слаг источника
+генерируется из имени, не меняется при переименовании; слаг задания содержит
+область сбора и дату со временем по Самаре, например
+`hugging-face-blog-2026-10-15-080000` или `all-sources-2026-10-15-080000`.
+Совпадения получают независимый суффикс. Числовые ключи используются внутри
+БД и в служебных полях, включая `discovery_job_id`; числовые адреса не поддерживаются.
+
+`JobRow`: `id`, `slug`, `kind` (`collect` / `discover` / `analyze`), `status`
 (`queued` / `running` / `completed` / `failed` / `cancelled`), `source_id`,
-`item_id`, `attempts`, `progress`, `error`, `result`, `created_at`,
+`source_slug`, `source_name`, `item_id`, `attempts`, `progress`, `error`, `result`, `created_at`,
 `started_at`, `completed_at`, `heartbeat_at`. `progress` при сборе содержит
-`sources_total`, `sources_done`, `new`, `updated`, `unchanged`, `errors`,
+`sources_total`, `sources_done`, `new`, `updated`, `unchanged`, `skipped`, `errors`,
 `warnings` (число предупреждений сбора). `unchanged` включает сохранение
 прежнего качественного текста при неудачной или короткой догрузке.
 `completed` задания `collect` означает завершение сбора; анализ материалов
@@ -650,10 +660,30 @@ URL может совпадать с исходным URL проверки ил�
 `result` проверки источника описан выше; у остальных стадий это итог стадии.
 Ключ провайдера, тело его ответа и токен владения заданием не выдаются.
 
-`GET /runs` дополнительно принимает `source_id`. `RunRow`: `id`,
-`source_id`, `source_name`, `job_id` (nullable после очистки истории),
+`GET /runs` дополнительно принимает `source_slug`. `RunRow`: `id`,
+`source_id`, `source_name`, `source_slug`, `source_url`, `source_kind`,
+`job_id`, `job_slug` (nullable после очистки истории),
 `status`, `started_at`, `completed_at`, `new_count`, `updated_count`,
-`unchanged_count`, `error`. Это история попыток обхода, не список публикаций.
+`unchanged_count`, `skipped_count`, `warning_count`, `parameters`, `http_status`,
+`not_modified`, `limit_reached`, `diagnostics_truncated`, `error`.
+Одна строка соответствует попытке обхода одного источника. Название, адрес,
+тип источника и параметры сохраняются на начало попытки.
+
+`GET /jobs/{job_slug}/runs` возвращает попытки источников данного задания.
+`GET /jobs/{job_slug}/items` возвращает сохранённые наблюдения с фильтрами
+`source_slug`, `outcome` (`new|updated|unchanged|skipped`), `warnings_only`.
+Оба метода используют `page=1`, `page_size=20`, максимум 50.
+`RunItemRow`: `id`, `run_id`, `source_name`, `source_slug`, `title`, `url`,
+`item_id` (nullable), `outcome`, `reason`, `warning`, `stage`,
+`preserved_previous`, `analysis_status`, `analysis_reason`, `analysis_job_slug`.
+Диагностика не перезаписывается последующим сбором. Состояние анализа
+вычисляется для сохранённого хеша текста, а не для новой версии карточки.
+Завершённое задание без сохранённого анализа обозначается `analysis_status=skipped`
+с безопасным пояснением `analysis_reason`, например при смене версии текста.
+Пропущенные кандидаты не создают материалы. Диагностика пропусков ограничена
+200 строками на обход; при усечении `diagnostics_truncated=true`.
+`limit_reached` означает достижение лимита принятых материалов, а не полный
+просмотр всех публикаций источника.
 
 #### Настройки
 

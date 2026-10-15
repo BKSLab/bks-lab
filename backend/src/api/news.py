@@ -24,8 +24,11 @@ from src.schemas.news import (
     NewsDecision,
     NewsFormat,
     NewsStatus,
+    NewsSlug,
     QueuedJob,
     RunRow,
+    RunItemRow,
+    RunOutcome,
     SettingsPatch,
     SettingsRow,
     SourceCreate,
@@ -76,10 +79,12 @@ router = APIRouter(
     },
 )
 RowID = Annotated[int, Path(ge=1, description="Positive news record ID.")]
+Slug = Annotated[NewsSlug, Path(description="Stable readable news address.")]
+FilterSlug = Annotated[NewsSlug | None, Query(description="Stable source address.")]
 Page = Annotated[int, Query(ge=1, description="One-based page number.")]
 PageSize = Annotated[int, Query(ge=1, le=50, description="Maximum rows per page.")]
 FilterID = Annotated[
-    int | None, Query(ge=1, description="Existing taxonomy or source ID.")
+    int | None, Query(ge=1, description="Existing taxonomy ID.")
 ]
 
 
@@ -137,8 +142,21 @@ async def create_source(data: SourceCreate, service: NewsAdminServiceDep) -> Sou
     return await service.create_source(data)
 
 
+@router.get(
+    "/sources/{source_slug}",
+    response_model=SourceRow,
+    summary="Read a news source",
+    description="Read one source's configuration and collection health by its stable address.",
+    operation_id="newsSource",
+    response_description="Source configuration and health.",
+)
+async def source(source_slug: Slug, service: NewsAdminServiceDep) -> SourceRow:
+    """Read a configured source without requesting any external resource."""
+    return await service.get_source(source_slug)
+
+
 @router.patch(
-    "/sources/{source_id}",
+    "/sources/{source_slug}",
     response_model=SourceRow,
     summary="Edit a news source",
     description="Edit editorial fields or apply newly checked URL and selectors.",
@@ -146,10 +164,10 @@ async def create_source(data: SourceCreate, service: NewsAdminServiceDep) -> Sou
     response_description="Updated source.",
 )
 async def update_source(
-    source_id: RowID, data: SourcePatch, service: NewsAdminServiceDep
+    source_slug: Slug, data: SourcePatch, service: NewsAdminServiceDep
 ) -> SourceRow:
     """Update a source with discovery enforced for adapter changes."""
-    return await service.update_source(source_id, data)
+    return await service.update_source(source_slug, data)
 
 
 @router.get(
@@ -250,7 +268,7 @@ async def items(
     service: NewsAdminServiceDep,
     page: Page = 1,
     page_size: PageSize = 20,
-    source_id: FilterID = None,
+    source_slug: FilterSlug = None,
     category_id: FilterID = None,
     topic_id: FilterID = None,
     format: Annotated[
@@ -276,7 +294,7 @@ async def items(
     return await service.list_items(
         page=page,
         page_size=page_size,
-        source_id=source_id,
+        source_slug=source_slug,
         category_id=category_id,
         topic_id=topic_id,
         format=format,
@@ -345,16 +363,54 @@ async def collect(data: CollectRequest, service: NewsAdminServiceDep) -> QueuedJ
 
 
 @router.get(
-    "/jobs/{job_id}",
+    "/jobs/{job_slug}",
     response_model=JobRow,
     summary="Read a news job",
     description="Read durable state, counters and safe discovery results.",
     operation_id="newsJob",
     response_description="Current job state.",
 )
-async def job(job_id: RowID, service: NewsAdminServiceDep) -> JobRow:
+async def job(job_slug: Slug, service: NewsAdminServiceDep) -> JobRow:
     """Read progress and a completed source preview."""
-    return await service.get_job(job_id)
+    return await service.get_job(job_slug)
+
+
+@router.get(
+    "/jobs/{job_slug}/runs",
+    response_model=Paged[RunRow],
+    summary="Read source attempts for a job",
+    description="Read saved source snapshots, collection parameters and counters for one job.",
+    operation_id="newsJobRuns",
+    response_description="Paged source run report.",
+)
+async def job_runs(
+    job_slug: Slug, service: NewsAdminServiceDep,
+    page: Page = 1, page_size: PageSize = 20,
+) -> Paged[RunRow]:
+    """Read one job's bounded collection attempt history."""
+    return await service.list_job_runs(job_slug, page=page, page_size=page_size)
+
+
+@router.get(
+    "/jobs/{job_slug}/items",
+    response_model=Paged[RunItemRow],
+    summary="Read candidate observations for a job",
+    description="Read historical ingestion outcomes and exact-version analysis state, with bounded filters.",
+    operation_id="newsJobItems",
+    response_description="Paged candidate observations.",
+)
+async def job_items(
+    job_slug: Slug, service: NewsAdminServiceDep,
+    page: Page = 1, page_size: PageSize = 20,
+    outcome: Annotated[RunOutcome | None, Query(description="Observed ingestion outcome.")] = None,
+    warnings_only: Annotated[bool, Query(description="Return only observations carrying a warning.")] = False,
+    source_slug: FilterSlug = None,
+) -> Paged[RunItemRow]:
+    """Read candidate details independently of the mutable current material."""
+    return await service.list_job_items(
+        job_slug, page=page, page_size=page_size, outcome=outcome,
+        warnings_only=warnings_only, source_slug=source_slug,
+    )
 
 
 @router.get(
@@ -369,10 +425,10 @@ async def runs(
     service: NewsAdminServiceDep,
     page: Page = 1,
     page_size: PageSize = 20,
-    source_id: FilterID = None,
+    source_slug: FilterSlug = None,
 ) -> Paged[RunRow]:
     """Read collection outcomes and safe failure summaries."""
-    return await service.list_runs(page=page, page_size=page_size, source_id=source_id)
+    return await service.list_runs(page=page, page_size=page_size, source_slug=source_slug)
 
 
 @router.get(

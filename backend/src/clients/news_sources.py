@@ -6,7 +6,7 @@ import hashlib
 import io
 import json
 import re
-from dataclasses import replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from typing import Any
@@ -122,6 +122,29 @@ def _safe_link(base: str, value: str | None) -> str | None:
         return None
 
 
+@dataclass
+class _CollectionObservations:
+    """Retain a bounded report for one parse, including worker-thread parsing."""
+
+    MAX_SKIPPED = 200
+
+    skipped: list[dict[str, Any]] = field(default_factory=list)
+    limit_reached: bool = False
+    truncated: bool = False
+
+    def skip(self, title: str, url: str | None, reason: str, stage: str) -> None:
+        if len(self.skipped) >= self.MAX_SKIPPED:
+            self.truncated = True
+            return
+        self.skipped.append({
+            "title": re.sub(r"[\x00-\x1f\x7f]", "", clean_text(title, limit=1000)),
+            "url": _safe_link("", url),
+            "reason": reason,
+            "stage": stage,
+            "outcome": "skipped",
+        })
+
+
 class NewsSourceClient:
     """Discover and collect sources through the shared public-only HTTP client."""
 
@@ -176,17 +199,22 @@ class NewsSourceClient:
             headers["If-Modified-Since"] = last_modified
         response = await self.http.get(url, headers=headers)
         if response.status_code == 304:
-            return CollectionResult([], etag, last_modified, True, response.url, kind)
+            return CollectionResult([], etag, last_modified, True, response.url, kind, http_status=304)
         self._require_ok(response)
         adapter = self if max_excerpt_chars is None else NewsSourceClient(self.http, max_excerpt_chars)
         if cutoff is None and first_run:
             cutoff = datetime.now(timezone.utc) - timedelta(days=lookback_days)
-        actual_kind, items = await asyncio.to_thread(adapter._parse, response, kind, config, max_items, cutoff, known_urls)
+        observations = _CollectionObservations()
+        actual_kind, items = await asyncio.to_thread(
+            adapter._parse, response, kind, config, max_items, cutoff, known_urls, observations,
+        )
         warnings: list[str] = []
         items = list(await asyncio.gather(*(adapter._enrich(item, warnings) for item in items)))
         return CollectionResult(
             items, response.headers.get("etag"), response.headers.get("last-modified"),
             False, response.url, actual_kind, list(dict.fromkeys(warnings)),
+            skipped=observations.skipped, http_status=response.status_code,
+            limit_reached=observations.limit_reached, diagnostics_truncated=observations.truncated,
         )
 
     async def refetch(
@@ -209,6 +237,7 @@ class NewsSourceClient:
         self, response: NewsHttpResponse, kind: str | None, config: dict, limit: int,
         cutoff: datetime | None = None,
         known_urls: set[str] | None = None,
+        observations: _CollectionObservations | None = None,
     ) -> tuple[str, list[CollectedItem]]:
         body = response.content
         if re.search(br"<!\s*(?:DOCTYPE|ENTITY)\b", body, re.IGNORECASE) and kind == "rss":
@@ -217,12 +246,13 @@ class NewsSourceClient:
         if kind == "rss" or (kind is None and is_feed):
             if re.search(br"<!\s*(?:DOCTYPE|ENTITY)\b", body, re.IGNORECASE):
                 raise NewsSourceError("unsafe_xml", "Лента с объявлениями XML-сущностей не поддерживается.")
-            return "rss", self._parse_feed(body, response.url, limit, cutoff, known_urls)
-        return "html", self._parse_html(body, response.url, config, limit, cutoff, known_urls)
+            return "rss", self._parse_feed(body, response.url, limit, cutoff, known_urls, observations)
+        return "html", self._parse_html(body, response.url, config, limit, cutoff, known_urls, observations)
 
     def _parse_feed(
         self, body: bytes, base: str, limit: int, cutoff: datetime | None = None,
         known_urls: set[str] | None = None,
+        observations: _CollectionObservations | None = None,
     ) -> list[CollectedItem]:
         # A bytes argument can be interpreted by feedparser as a local path.
         feed = feedparser.parse(io.BytesIO(body), resolve_relative_uris=False)
@@ -236,11 +266,26 @@ class NewsSourceClient:
             if not url and external_id and external_id.startswith(("https://", "http://")):
                 url = _safe_link(base, external_id)
             title = clean_text(str(entry.get("title", "")), limit=1000)
-            if not url or not title or url in seen:
+            if not url:
+                if observations is not None:
+                    has_link = entry.get("link") or (external_id and external_id.startswith(("https://", "http://")))
+                    reason = ("Некорректная или небезопасная ссылка на публикацию." if has_link
+                              else "Отсутствует ссылка на публикацию.")
+                    observations.skip(title, None, reason, "parsing")
+                continue
+            if not title:
+                if observations is not None:
+                    observations.skip(title, url, "Отсутствует заголовок публикации.", "parsing")
+                continue
+            if url in seen:
+                if observations is not None:
+                    observations.skip(title, url, "Повторная ссылка на публикацию.", "filter")
                 continue
             seen.add(url)
             published_at = _feed_date(entry, "published")
             if cutoff and published_at and published_at < cutoff and url not in (known_urls or ()):
+                if observations is not None:
+                    observations.skip(title, url, "Дата публикации раньше начала периода сбора.", "filter")
                 continue
             description = clean_text(str(entry.get("summary", "")), limit=self.max_excerpt_chars)
             contents = entry.get("content") or []
@@ -254,6 +299,8 @@ class NewsSourceClient:
                 {"language": str(language)[:30], "method": "rss"},
             ))
             if len(items) >= limit:
+                if observations is not None:
+                    observations.limit_reached = True
                 break
         return items
 
@@ -285,6 +332,7 @@ class NewsSourceClient:
     def _parse_html(
         self, body: bytes, base: str, config: dict, limit: int, cutoff: datetime | None = None,
         known_urls: set[str] | None = None,
+        observations: _CollectionObservations | None = None,
     ) -> list[CollectedItem]:
         soup = BeautifulSoup(body, "html.parser")
         for tag in soup.select("script, style, nav, aside, form, template, "
@@ -306,12 +354,26 @@ class NewsSourceClient:
                 if node.name == "a" and not config.get("link_selector"):
                     link = node
                 url = _safe_link(base, str(link.get("href", ""))) if link else None
-                if automatic and url and not self._is_article_url(url, base):
-                    continue
                 title = clean_text(str(title_node or link or ""), limit=1000)
                 if automatic and (title_node is None or title_node is link) and link and link.get("title"):
                     title = clean_text(str(link["title"]), limit=1000)
-                if not url or not title or url in seen:
+                if automatic and url and not self._is_article_url(url, base):
+                    if observations is not None:
+                        observations.skip(title, url, "Ссылка не ведёт на публикацию.", "filter")
+                    continue
+                if not url:
+                    if observations is not None:
+                        reason = ("Некорректная или небезопасная ссылка на публикацию."
+                                  if link and link.get("href") else "Отсутствует ссылка на публикацию.")
+                        observations.skip(title, None, reason, "parsing")
+                    continue
+                if not title:
+                    if observations is not None:
+                        observations.skip(title, url, "Отсутствует заголовок публикации.", "parsing")
+                    continue
+                if url in seen:
+                    if observations is not None:
+                        observations.skip(title, url, "Повторная ссылка на публикацию.", "filter")
                     continue
                 # A nested link must not reintroduce a dated card rejected by the cutoff.
                 seen.add(url)
@@ -322,12 +384,16 @@ class NewsSourceClient:
                 date_text = (str(date_node.get("datetime") or date_node.get_text(" ", strip=True)) if date_node else None)
                 published_at = _parse_date(date_text)
                 if cutoff and published_at and published_at < cutoff and url not in (known_urls or ()):
+                    if observations is not None:
+                        observations.skip(title, url, "Дата публикации раньше начала периода сбора.", "filter")
                     continue
                 items.append(CollectedItem(
                     None, url, url, title, excerpt, excerpt, published_at, None,
                     {"language": str(soup.html.get("lang", ""))[:30] if soup.html else "", "method": "html"},
                 ))
                 if len(items) >= limit:
+                    if observations is not None:
+                        observations.limit_reached = True
                     break
             return items
         except (SelectorSyntaxError, ValueError, TypeError):
@@ -445,25 +511,59 @@ class NewsSourceClient:
             response = await self.http.get(item.url)
             self._require_ok(response)
             canonical, content = await asyncio.to_thread(self._article, response)
-        except NewsSourceError:
-            warning = "Не удалось получить текст страницы; сохранена карточка источника."
+        except NewsSourceError as error:
+            error_code, detail = self._collection_error(error)
+            warning = "Не удалось получить текст страницы; сохранена карточка источника. " + detail
             warnings.append(warning)
-            return self._collection_quality(item, "fetch_failed", warning)
+            return self._collection_quality(item, "fetch_failed", warning, stage="fetch", error_code=error_code)
         enriched = replace(item, canonical_url=canonical or item.canonical_url,
                            content=content if len(content) > len(item.content) else item.content)
         if len(enriched.content or enriched.description) >= NEWS_MIN_CONTENT_CHARS:
             return self._collection_quality(enriched, "ready")
         warning = "Недостаточно текста для анализа; сохранена карточка источника."
         warnings.append(warning)
-        return self._collection_quality(enriched, "insufficient_text", warning)
+        return self._collection_quality(enriched, "insufficient_text", warning, stage="extraction")
 
     @staticmethod
-    def _collection_quality(item: CollectedItem, status: str, warning: str | None = None) -> CollectedItem:
+    def _collection_error(error: NewsSourceError) -> tuple[str | None, str]:
+        """Describe known failures without retaining request URLs or external messages."""
+        code = getattr(error, "code", None)
+        code = code if isinstance(code, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,63}", code) else None
+        if code in {"http_status", "http_unavailable", "robots_unavailable"}:
+            status = re.search(r"\bHTTP\s+([1-5][0-9]{2})\b", str(error))
+            if status:
+                prefix = "Не удалось получить robots.txt" if code == "robots_unavailable" else "Источник вернул"
+                return code, f"{prefix} HTTP {status[1]}."
+        summaries = {
+            "http_status": "Неожиданный HTTP-статус источника.",
+            "http_unavailable": "Источник недоступен или не ответил вовремя.",
+            "dns_timeout": "Истекло время проверки адреса источника.",
+            "dns_error": "Не удалось определить адрес источника.",
+            "unsafe_url": "Адрес страницы не прошёл проверку безопасности.",
+            "robots_denied": "Получение страницы запрещено robots.txt.",
+            "robots_unavailable": "Не удалось проверить robots.txt.",
+            "redirect_limit": "Превышен лимит перенаправлений.",
+            "content_type": "Источник вернул неподдерживаемый тип документа.",
+            "content_encoding": "Источник вернул повреждённый или неподдерживаемый сжатый документ.",
+            "response_too_large": "Документ превышает допустимый размер.",
+        }
+        return code, summaries.get(code, "Ошибка получения страницы источника.")
+
+    @staticmethod
+    def _collection_quality(
+        item: CollectedItem, status: str, warning: str | None = None,
+        *, stage: str | None = None, error_code: str | None = None,
+    ) -> CollectedItem:
         """Keep collection quality with the observation without discarding source metadata."""
         metadata = {**item.metadata, "collection_status": status}
-        metadata.pop("collection_warning", None)
+        for key in ("collection_warning", "collection_stage", "collection_error_code"):
+            metadata.pop(key, None)
         if warning:
             metadata["collection_warning"] = warning
+        if stage:
+            metadata["collection_stage"] = stage
+        if error_code:
+            metadata["collection_error_code"] = error_code
         return replace(item, metadata=metadata)
 
     def _article(self, response: NewsHttpResponse) -> tuple[str | None, str]:

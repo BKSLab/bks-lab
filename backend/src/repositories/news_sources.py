@@ -2,16 +2,22 @@
 
 from __future__ import annotations
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.orm import selectinload
 
 from src.db.models.news_catalog import NewsCategory, NewsTopic
+from src.core.news_slugs import SOURCE_SLUG_MAX, readable_slug
 from src.db.models.news_sources import NewsSource
 from src.exceptions.news import NewsConflictError
 from src.repositories.news_base import NewsRepository
 
 
 class NewsSourceRepository(NewsRepository):
+    async def get_by_slug(self, slug: str) -> NewsSource | None:
+        """Resolve a stable source address without interpreting numeric IDs."""
+        async with self.operation():
+            return await self.db_session.scalar(self.query().where(NewsSource.slug == slug))
+
     @staticmethod
     def query():
         return select(NewsSource).options(
@@ -59,7 +65,18 @@ class NewsSourceRepository(NewsRepository):
     async def create(self, values: dict) -> NewsSource:
         """Save one checked source and its editorial tags in one transaction."""
         async with self.operation():
-            row = NewsSource(topics=[], categories=[])
+            await self.db_session.execute(
+                text("SELECT pg_advisory_xact_lock(:key)"), {"key": 721409083}
+            )
+            base = readable_slug(values["name"])
+            if base in {"new", "catalogue", "discover"}:
+                base = f"source-{base}"
+            slug, suffix = base, 1
+            while await self.db_session.scalar(select(NewsSource.id).where(NewsSource.slug == slug)):
+                suffix += 1
+                tail = f"-{suffix}"
+                slug = f"{base[:SOURCE_SLUG_MAX - len(tail)].rstrip('-')}{tail}"
+            row = NewsSource(slug=slug, topics=[], categories=[])
             await self._assign(row, values)
             self.db_session.add(row)
             await self.db_session.commit()

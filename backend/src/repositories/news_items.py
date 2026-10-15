@@ -10,6 +10,7 @@ from src.db.models import (
     NewsEditorialDecision,
     NewsItem,
     NewsJob,
+    NewsRunItem,
     NewsSource,
     NewsSourceRun,
 )
@@ -200,6 +201,9 @@ class NewsItemRepository(NewsRepository):
         expected_kind: str | None = None,
         expected_config: dict | None = None,
         collection_warning: str | None = None,
+        run_id: int | None = None,
+        skipped: list[dict] | None = None,
+        run_diagnostics: dict | None = None,
     ) -> dict:
         """Commit observations and source cursor together after deduplication and ownership checks."""
         async with self.operation():
@@ -219,6 +223,10 @@ class NewsItemRepository(NewsRepository):
                 )
             ):
                 raise NewsSourceChangedError("Source configuration changed")
+            if run_id is not None:
+                run = await self.db_session.get(NewsSourceRun, run_id, with_for_update=True)
+                if run is None or run.source_id != source_id or run.job_id != job_id:
+                    raise NewsConflictError("Collection report does not belong to this source and job")
             # Equal normalized URLs serialize across sources, making duplicate links deterministic.
             for url in sorted({item["normalized_url"] for item in items}):
                 await self.db_session.execute(
@@ -242,6 +250,8 @@ class NewsItemRepository(NewsRepository):
             }
             for data in items:
                 values = {key: value for key, value in data.items() if key in fields}
+                observation = dict(values.get("metadata_json") or {})
+                preserved_previous = False
                 # Source adapters normalize these URLs while retaining meaningful query fields.
                 aliases = {values["url"]}
                 identity_urls = {values["url"], values["normalized_url"]}
@@ -293,6 +303,7 @@ class NewsItemRepository(NewsRepository):
                     self.db_session.add(row)
                     await self.db_session.flush()
                     counts["new"] += 1
+                    outcome = "new"
                 else:
                     aliases.add(row.url)
                     aliases.update(self._source_url_aliases(row.metadata_json))
@@ -304,6 +315,7 @@ class NewsItemRepository(NewsRepository):
                         or incoming_metadata.get("collection_status") == "fetch_failed"
                     )
                     if degraded:
+                        preserved_previous = True
                         # A failed fetch is not an editorial revision. Preserve the last usable text.
                         for key in ("title", "excerpt", "content", "content_hash", "canonical_url", "normalized_url"):
                             values[key] = getattr(row, key)
@@ -338,7 +350,41 @@ class NewsItemRepository(NewsRepository):
                         row.status, row.latest_analysis_id = "pending_analysis", None
                     row.last_seen_at = now
                     counts["updated" if changed else "unchanged"] += 1
+                    outcome = "updated" if changed else "unchanged"
                 counts["item_ids"].append(row.id)
+                if run_id is not None:
+                    warning = observation.get("collection_warning")
+                    if not warning and max(len(data.get("content", "")), len(data.get("excerpt", ""))) < NEWS_MIN_CONTENT_CHARS:
+                        warning = "Недостаточно текста для анализа."
+                    self.db_session.add(NewsRunItem(
+                        run_id=run_id, item_id=row.id,
+                        title=data["title"][:1000], url=data["url"], outcome=outcome,
+                        content_hash=row.content_hash,
+                        warning=str(warning)[:500] if warning else None,
+                        stage=observation.get("collection_stage") or ("extraction" if warning else None),
+                        preserved_previous=preserved_previous,
+                        reason="Такой материал уже найден в другом источнике." if row.duplicate_of_id else None,
+                    ))
+            if run_id is not None:
+                self.db_session.add_all([
+                    NewsRunItem(
+                        run_id=run_id, item_id=None, title=str(entry.get("title") or "Без заголовка")[:1000],
+                        url=entry.get("url"), outcome="skipped", reason=str(entry["reason"])[:500],
+                        stage=entry.get("stage"), preserved_previous=False,
+                    ) for entry in skipped or []
+                ])
+                diagnostics = run_diagnostics or {}
+                run.status, run.completed_at = "completed", now
+                run.new_count, run.updated_count, run.unchanged_count = (
+                    counts["new"], counts["updated"], counts["unchanged"],
+                )
+                run.skipped_count = len(skipped or [])
+                run.warning_count = diagnostics.get("warning_count", 0)
+                run.http_status = diagnostics.get("http_status")
+                run.not_modified = diagnostics.get("not_modified", False)
+                run.limit_reached = diagnostics.get("limit_reached", False)
+                run.diagnostics_truncated = diagnostics.get("diagnostics_truncated", False)
+                run.error = collection_warning[:500] if collection_warning else None
             source.cursor, source.etag, source.last_modified = (
                 cursor,
                 etag,

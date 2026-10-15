@@ -15,14 +15,14 @@ export function NewsItemRow({ item, format, planned = false }: { item: NewsItem;
       </header>
       <NewsAnalysisStatus item={item} />
       {item.analysis ? <NewsAnalysisView analysis={item.analysis} /> : item.excerpt && <p>{item.excerpt}</p>}
-      {item.duplicate_of_id && <p className="admin-muted">Совпадает с <Link className="admin-link" prefetch={false} href={`/admin/news/items/${item.duplicate_of_id}`}>материалом № {item.duplicate_of_id}</Link>.</p>}
+      {item.duplicate_of_id && <p className="admin-muted">Совпадает с <Link className="admin-link" prefetch={false} href={`/admin/news/items/${item.duplicate_of_id}`}>другим сохранённым материалом</Link>.</p>}
     </div>
     <div className="news-item-actions news-stack">
       {planned && item.decision && <div className="news-stack">
         <p><strong>Назначение в плане:</strong> {formatLabels[item.decision.format]}</p>
         {item.decision.comment && <p><strong>Комментарий редактора:</strong> {item.decision.comment}</p>}
       </div>}
-      <NewsDecisionForm itemId={item.id} current={item.decision} defaultFormat={format ?? item.analysis?.recommended_formats[0]} compact />
+      <NewsDecisionForm itemId={item.id} itemTitle={item.title} current={item.decision} defaultFormat={format ?? item.analysis?.recommended_formats[0]} compact />
     </div>
   </article>;
 }

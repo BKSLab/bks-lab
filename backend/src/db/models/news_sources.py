@@ -27,6 +27,9 @@ class NewsSource(Base):
     id: Mapped[int] = mapped_column(
         primary_key=True, doc="Source ID.", comment="Source ID."
     )
+    slug: Mapped[str] = mapped_column(
+        String(160), unique=True, doc="Stable readable address.", comment="Stable readable address."
+    )
     name: Mapped[str] = mapped_column(
         String(200), doc="Display name.", comment="Display name."
     )

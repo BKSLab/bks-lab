@@ -19,11 +19,11 @@ import NewsItemPage from "@/app/(admin)/admin/news/items/[id]/page";
 import NewsSourcesPage from "@/app/(admin)/admin/news/sources/page";
 import NewsCataloguePage from "@/app/(admin)/admin/news/sources/catalogue/page";
 import NewsNewSourcePage from "@/app/(admin)/admin/news/sources/new/page";
-import NewsSourcePage from "@/app/(admin)/admin/news/sources/[id]/page";
+import NewsSourcePage from "@/app/(admin)/admin/news/sources/[slug]/page";
 import NewsTopicsPage from "@/app/(admin)/admin/news/topics/page";
 import NewsSettingsPage from "@/app/(admin)/admin/news/settings/page";
 import NewsRunsPage from "@/app/(admin)/admin/news/runs/page";
-import NewsJobPage from "@/app/(admin)/admin/news/jobs/[id]/page";
+import NewsJobPage from "@/app/(admin)/admin/news/jobs/[slug]/page";
 import { adminFetch, requireAdmin } from "@/lib/admin-api";
 import { sourceCatalogue } from "./news-catalogue-fixtures";
 import { newsAnalysis, newsCategory, newsDecision, newsItem, newsJob, newsSettings, newsSource, newsTopic } from "./news-fixtures";
@@ -40,7 +40,8 @@ beforeEach(() => {
     if (path === "/news/topics") return [newsTopic];
     if (path === "/news/categories") return [newsCategory];
     if (path === "/news/items/4") return newsItem;
-    if (path === "/news/jobs/9") return newsJob;
+    if (path === `/news/jobs/${newsJob.slug}`) return newsJob;
+    if (path === `/news/sources/${newsSource.slug}`) return newsSource;
     if (path === "/news/settings") return newsSettings;
     return paged;
   });
@@ -64,11 +65,11 @@ describe("protected editorial routes", () => {
     ["sources", () => NewsSourcesPage()],
     ["source catalogue", () => NewsCataloguePage()],
     ["new source", () => NewsNewSourcePage(emptyParams())],
-    ["source", () => NewsSourcePage({ params: Promise.resolve({ id: "7" }) })],
+    ["source", () => NewsSourcePage({ params: Promise.resolve({ slug: newsSource.slug }) })],
     ["topics", () => NewsTopicsPage()],
     ["settings", () => NewsSettingsPage()],
     ["runs", () => NewsRunsPage(emptyParams())],
-    ["job", () => NewsJobPage({ params: Promise.resolve({ id: "9" }) })],
+    ["job", () => NewsJobPage({ params: Promise.resolve({ slug: newsJob.slug }), ...emptyParams() })],
   ])("checks the session before reading %s data", async (_label, page) => {
     vi.mocked(requireAdmin).mockRejectedValue(new Error("LOGIN_REQUIRED"));
     await expect(page()).rejects.toThrow("LOGIN_REQUIRED");
@@ -95,10 +96,10 @@ describe("protected editorial routes", () => {
 
   it.each([
     ["all active sources", "", {}],
-    ["one paused source", "7", { source_id: 7 }],
+    ["one paused source", newsSource.slug, { source_slug: newsSource.slug }],
   ])("starts a manual check of %s directly from the sources page", async (_label, selected, body) => {
     const fetchMock = vi.fn()
-      .mockResolvedValueOnce(new Response(JSON.stringify({ job_id: 9, status: "queued" }), { status: 202 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ job_id: 9, job_slug: newsJob.slug, status: "queued" }), { status: 202 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ ...newsJob, kind: "collect", progress: { sources_done: 1, new_count: 2 }, result: {} })));
     vi.stubGlobal("fetch", fetchMock);
     try {
@@ -112,8 +113,8 @@ describe("protected editorial routes", () => {
       expect(fetchMock.mock.calls[0][0]).toBe("/api/admin/news/jobs/collect");
       expect(fetchMock.mock.calls[0][1]).toMatchObject({ method: "POST", credentials: "same-origin", cache: "no-store" });
       expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual(body);
-      expect(fetchMock.mock.calls[1][0]).toBe("/api/admin/news/jobs/9");
-      expect(controls.getByRole("link", { name: "Открыть задание № 9" }).getAttribute("href")).toBe("/admin/news/jobs/9");
+      expect(fetchMock.mock.calls[1][0]).toBe(`/api/admin/news/jobs/${newsJob.slug}`);
+      expect(controls.getByRole("link", { name: "Открыть отчёт задания" }).getAttribute("href")).toBe(`/admin/news/jobs/${newsJob.slug}`);
       expect(controls.getByRole("link", { name: "История проверок" }).getAttribute("href")).toBe("/admin/news/runs");
     } finally {
       vi.unstubAllGlobals();
@@ -142,7 +143,7 @@ describe("protected editorial routes", () => {
   });
 
   it("renders accessible collection filters, two format choices, and the empty state", async () => {
-    const { container } = render(<AdminLayout>{await NewsItemsPage({ searchParams: Promise.resolve({ format: "longread_candidate", source_id: "7", page: "-1", min_score: "800" }) })}</AdminLayout>);
+    const { container } = render(<AdminLayout>{await NewsItemsPage({ searchParams: Promise.resolve({ format: "longread_candidate", source_slug: newsSource.slug, page: "-1", min_score: "800" }) })}</AdminLayout>);
     expect(screen.getAllByRole("main")).toHaveLength(1);
     expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
     expect(screen.getByRole("link", { name: "Для статей" }).getAttribute("aria-current")).toBe("page");
@@ -225,7 +226,7 @@ describe("protected editorial routes", () => {
     expect(row.getByText("Для статьи", { selector: "dt" }).nextElementSibling?.textContent).toContain("86.0");
     expect(row.getByText("Короткая новость", { selector: "dt" }).nextElementSibling?.textContent).toContain("82.0");
     for (const label of ["Анализ готов", "Подходит тематике", "Нужна проверка фактов", "Исследования", "Темы: AI Engineering"]) expect(row.getByText(label)).toBeTruthy();
-    expect(row.getByRole("link", { name: "материалом № 3" }).getAttribute("href")).toBe("/admin/news/items/3");
+    expect(row.getByRole("link", { name: "другим сохранённым материалом" }).getAttribute("href")).toBe("/admin/news/items/3");
     expect(row.getByRole("button", { name: "Добавить в план" })).toBeTruthy();
     fireEvent.click(row.getByText("Редакторское решение", { selector: "summary" }));
     expect(row.getByRole("button", { name: "Отложить" })).toBeTruthy();
@@ -312,7 +313,7 @@ describe("protected editorial routes", () => {
     const { container } = render(<AdminLayout>{await NewsItemPage({ params: Promise.resolve({ id: "4" }) })}</AdminLayout>);
     expect(screen.getByText("Недостаточно текста")).toBeTruthy();
     expect(screen.getByText("Сбор материала: Не удалось загрузить страницу.")).toBeTruthy();
-    expect(screen.getByRole("link", { name: "Открыть источник для повторного сбора" }).getAttribute("href")).toBe("/admin/news/sources/7");
+    expect(screen.getByRole("link", { name: "Открыть источник для повторного сбора" }).getAttribute("href")).toBe(`/admin/news/sources/${newsSource.slug}`);
     expect(screen.queryByRole("button", { name: "Повторить анализ" })).toBeNull();
     expect(screen.queryByText(/Материал ожидает анализа/)).toBeNull();
     expect((await axe(container)).violations).toEqual([]);
@@ -344,11 +345,11 @@ describe("protected editorial routes", () => {
     ["sources", () => NewsSourcesPage()],
     ["source catalogue", () => NewsCataloguePage()],
     ["new source", () => NewsNewSourcePage(emptyParams())],
-    ["source settings", () => NewsSourcePage({ params: Promise.resolve({ id: "7" }) })],
+    ["source settings", () => NewsSourcePage({ params: Promise.resolve({ slug: newsSource.slug }) })],
     ["taxonomy", () => NewsTopicsPage()],
     ["settings", () => NewsSettingsPage()],
     ["runs", () => NewsRunsPage(emptyParams())],
-    ["job", () => NewsJobPage({ params: Promise.resolve({ id: "9" }) })],
+    ["job", () => NewsJobPage({ params: Promise.resolve({ slug: newsJob.slug }), ...emptyParams() })],
   ])("renders %s with one main, one heading and no axe violations", async (_label, page) => {
     const { container } = render(<AdminLayout>{await page()}</AdminLayout>);
     expect(screen.getAllByRole("main")).toHaveLength(1);

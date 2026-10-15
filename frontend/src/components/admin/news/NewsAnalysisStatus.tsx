@@ -19,7 +19,7 @@ export function NewsAnalysisStatus({ item }: { item: NewsItem }) {
       <p className="admin-error">{item.analysis_error || "Не удалось выполнить анализ."}</p>
       <p className="admin-muted">После устранения причины ошибки повторите анализ на странице материала.</p>
     </>}
-    {state === "insufficient_text" && <p className="admin-muted">Для анализа нужен сохранённый текст. Сначала повторно соберите источник. <Link className="admin-link" prefetch={false} href={`/admin/news/sources/${item.source_id}`}>Открыть источник для повторного сбора</Link>.</p>}
+    {state === "insufficient_text" && <p className="admin-muted">Для анализа нужен сохранённый текст. Сначала повторно соберите источник. <Link className="admin-link" prefetch={false} href={`/admin/news/sources/${item.source_slug}`}>Открыть источник для повторного сбора</Link>.</p>}
     {item.collection_warning && <p className="admin-muted">Сбор материала: {item.collection_warning}</p>}
     {item.analysis && state !== "analyzed" && <p className="admin-muted">Ниже показан предыдущий анализ материала.</p>}
   </div>;

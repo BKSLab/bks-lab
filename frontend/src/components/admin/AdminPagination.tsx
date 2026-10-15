@@ -2,16 +2,18 @@ import Link from "next/link";
 
 import { adminHref, adminNumber } from "@/lib/admin-api/params";
 
-export function AdminPagination({ path, page, pages, total, params = {} }: {
+export function AdminPagination({ path, page, pages, total, params = {}, pageParam = "page", label = "Страницы результатов" }: {
   path: string;
   page: number;
   pages: number;
   total: number;
   params?: Record<string, string | number>;
+  pageParam?: string;
+  label?: string;
 }) {
-  const href = (target: number) => adminHref(path, { ...params, page: target });
+  const href = (target: number) => adminHref(path, { ...params, [pageParam]: target });
   return (
-    <nav className="admin-pagination" aria-label="Страницы результатов">
+    <nav className="admin-pagination" aria-label={label}>
       <p className="admin-muted">Всего: {adminNumber(total)}. Страница {page}{pages > 0 ? ` из ${pages}` : ""}.</p>
       <div className="admin-pagination-links">
         {page > 1 && <Link className="admin-button" prefetch={false} href={href(page - 1)}>Назад</Link>}

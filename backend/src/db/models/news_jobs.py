@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     DateTime,
     ForeignKey,
@@ -19,6 +20,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from src.db.models.base import Base
 
 if TYPE_CHECKING:
+    from src.db.models.news_items import NewsItem
     from src.db.models.news_sources import NewsSource
 
 
@@ -36,6 +38,9 @@ class NewsJob(Base):
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, doc="Job ID.", comment="Job ID.")
+    slug: Mapped[str] = mapped_column(
+        String(240), unique=True, doc="Stable readable queue address.", comment="Stable readable queue address."
+    )
     kind: Mapped[str] = mapped_column(
         String(12), doc="Pipeline stage.", comment="Pipeline stage."
     )
@@ -115,6 +120,8 @@ class NewsJob(Base):
         doc="Terminal state time.",
         comment="Terminal state time.",
     )
+    source: Mapped["NewsSource | None"] = relationship(lazy="raise_on_sql")
+    item: Mapped["NewsItem | None"] = relationship(lazy="raise_on_sql")
 
     def __repr__(self) -> str:
         return f"<NewsJob(id={self.id}, kind={self.kind}, status={self.status})>"
@@ -135,6 +142,33 @@ class NewsSourceRun(Base):
         index=True,
         doc="Owning collection job.",
         comment="Owning collection job.",
+    )
+    source_name: Mapped[str] = mapped_column(
+        String(200), doc="Source name at start.", comment="Source name at start."
+    )
+    source_slug: Mapped[str] = mapped_column(
+        String(160), index=True, doc="Source address at start.", comment="Source address at start."
+    )
+    source_url: Mapped[str] = mapped_column(
+        Text, doc="Source URL at start.", comment="Source URL at start."
+    )
+    source_kind: Mapped[str] = mapped_column(
+        String(10), doc="Adapter at start.", comment="Adapter at start."
+    )
+    parameters: Mapped[dict] = mapped_column(
+        JSONB, default=dict, doc="Safe collection parameters.", comment="Safe collection parameters."
+    )
+    not_modified: Mapped[bool] = mapped_column(
+        Boolean, default=False, doc="Conditional request returned no changes.", comment="Conditional request returned no changes."
+    )
+    http_status: Mapped[int | None] = mapped_column(
+        Integer, doc="Final source HTTP status.", comment="Final source HTTP status."
+    )
+    limit_reached: Mapped[bool] = mapped_column(
+        Boolean, default=False, doc="Collection candidate limit reached.", comment="Collection candidate limit reached."
+    )
+    diagnostics_truncated: Mapped[bool] = mapped_column(
+        Boolean, default=False, doc="Detailed observation limit reached.", comment="Detailed observation limit reached."
     )
     status: Mapped[str] = mapped_column(
         String(20), default="running", doc="Run state.", comment="Run state."
@@ -158,10 +192,17 @@ class NewsSourceRun(Base):
     unchanged_count: Mapped[int] = mapped_column(
         Integer, default=0, doc="Unchanged materials.", comment="Unchanged materials."
     )
+    skipped_count: Mapped[int] = mapped_column(
+        Integer, default=0, doc="Skipped candidates.", comment="Skipped candidates."
+    )
+    warning_count: Mapped[int] = mapped_column(
+        Integer, default=0, doc="Candidates with collection warnings.", comment="Candidates with collection warnings."
+    )
     error: Mapped[str | None] = mapped_column(
         Text, doc="Safe failure summary.", comment="Safe failure summary."
     )
     source: Mapped["NewsSource"] = relationship(lazy="raise_on_sql")
+    job: Mapped[NewsJob | None] = relationship(lazy="raise_on_sql")
 
     def __repr__(self) -> str:
         return f"<NewsSourceRun(id={self.id}, source_id={self.source_id})>"
