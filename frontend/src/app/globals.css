@@ -587,7 +587,12 @@
       grid-template-columns: repeat(3, minmax(0, 1fr));
     }
     .home-columns {
-      grid-template-columns: minmax(0, 1fr) min(36rem, 48%);
+      /* Use the right page gutter to preserve the main column's width. */
+      --home-notes-width: min(36rem, 48%);
+      --home-right-space: clamp(0px, calc((100vw - 1320px) / 2), 16rem);
+      grid-template-columns:
+        calc(100% - var(--home-notes-width) - 3rem + var(--home-right-space))
+        var(--home-notes-width);
       column-gap: 3rem;
     }
     .home-main .card-grid {
