@@ -54,7 +54,7 @@ describe("home page", () => {
       .toBe("/notes");
   });
 
-  it("renders complete notes in the accessible home section with local anchors", async () => {
+  it("renders complete notes in the accessible sidebar with local anchors", async () => {
     vi.mocked(getNotesFeed).mockResolvedValueOnce({ items: [
       {
         slug: "small-steps",
@@ -72,6 +72,7 @@ describe("home page", () => {
     expect(within(notes).getByRole("link", { name: "Маленькие шаги" }).getAttribute("href"))
       .toBe("#note-small-steps");
     expect(within(notes).getByText("Полный текст заметки.")).toBeTruthy();
+    expect(within(notes).getByText("bks-lab.ru")).toBeTruthy();
     expect(within(notes).getByRole("region", { name: "Лента заметок" }).getAttribute("tabindex")).toBe("0");
     expect(within(notes).queryByText("Заметки скоро появятся.")).toBeNull();
     expect(await axe(container)).toHaveNoViolations();

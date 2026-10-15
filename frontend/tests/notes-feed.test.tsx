@@ -51,6 +51,7 @@ describe("compact note entries", () => {
     expect(link.getAttribute("rel")).toContain("noreferrer");
     expect(link.closest("p")).toBe(screen.getByText("А".repeat(300)));
     const source = screen.getByText("Источник");
+    expect(screen.queryByText("bks-lab.ru")).toBeNull();
     const publishedAt = screen.getByText("15 октября 2026 г., 14:25");
     expect(source.closest("p")).toBe(publishedAt.closest("p"));
     expect(publishedAt.getAttribute("datetime")).toBe("2026-10-15T10:25:00Z");
@@ -75,8 +76,15 @@ describe("compact note entries", () => {
     })} />);
     expect(container.querySelector("strong")?.textContent).toBe(body);
     expect(screen.getByText("Продолжение")).toBeTruthy();
+    expect(screen.getByText("bks-lab.ru").closest("p")).toBe(screen.getByText("15 октября 2026 г.").closest("p"));
     expect(container.querySelector("[data-ad-slot], aside")).toBeNull();
     expect(screen.getByRole("link", { name: "Связанная статья" }).getAttribute("href")).toBe("/blog/post/long-read");
+  });
+
+  it("identifies manual notes in compact previews with the site name", () => {
+    render(<NoteEntry note={note("manual-preview")} compact preview />);
+    expect(screen.getByText("bks-lab.ru").closest("p")).toBe(screen.getByText("15 октября 2026 г., 14:25").closest("p"));
+    expect(screen.queryByText("Авторская")).toBeNull();
   });
 });
 

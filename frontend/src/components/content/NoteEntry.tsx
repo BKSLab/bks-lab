@@ -28,6 +28,7 @@ export function NoteEntry({
   const Heading = compact ? "h3" : "h2";
   const originalUrl = sourceUrl(note.source_url);
   const automatic = Boolean(note.source_name || note.source_url);
+  const attribution = automatic ? note.source_name : "bks-lab.ru";
   const dateTime = note.published_at_time ?? note.published_at;
   const hasTime = note.published_at_time && !Number.isNaN(Date.parse(note.published_at_time));
   const time = hasTime
@@ -83,7 +84,9 @@ export function NoteEntry({
         </p>
       )}
       <p className="note-meta">
-        {note.source_name && <span>{note.source_name}</span>}
+        {attribution && (
+          <span className={automatic ? undefined : "note-author"}>{attribution}</span>
+        )}
         <time dateTime={dateTime}>
           {formatDate(note.published_at)}{time ? `, ${time}` : ""}
         </time>

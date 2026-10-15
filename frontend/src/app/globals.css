@@ -361,6 +361,10 @@
     font-size: 0.875rem;
     line-height: 1.6;
   }
+  .note-author {
+    color: var(--color-accent);
+    font-weight: 600;
+  }
   .note-details,
   .note-related a {
     color: var(--color-accent);
@@ -582,11 +586,20 @@
     .card-grid {
       grid-template-columns: repeat(3, minmax(0, 1fr));
     }
+    .home-columns {
+      grid-template-columns: minmax(0, 1fr) min(36rem, 48%);
+      column-gap: 3rem;
+    }
     .home-main .card-grid {
       grid-template-columns: repeat(auto-fit, minmax(min(100%, 18rem), 1fr));
     }
     .home-notes {
-      padding-block: 4.5rem;
+      align-self: start;
+      margin-block: 4.5rem;
+      border-top: 0;
+      border-left: 1px solid var(--color-border);
+      padding-block: 0;
+      padding-left: 2rem;
     }
     .blog-columns {
       grid-template-columns: minmax(0, 7fr) minmax(0, 3fr);
