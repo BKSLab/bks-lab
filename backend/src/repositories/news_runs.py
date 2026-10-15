@@ -1,11 +1,13 @@
 """Collection histories scoped to a source and durable job."""
 
 from datetime import datetime, timezone
+from typing import Any
 
 from sqlalchemy import exists, func, select
 from sqlalchemy.orm import joinedload
 
 from src.db.models.news_analyses import NewsAnalysis
+from src.db.models.news_items import NewsItem
 from src.db.models.news_jobs import NewsJob, NewsSourceRun
 from src.db.models.news_run_items import NewsRunItem
 from src.db.models.news_sources import NewsSource
@@ -14,6 +16,58 @@ from src.repositories.news_base import NewsRepository
 
 
 class NewsRunRepository(NewsRepository):
+    async def latest_for_job(self, job_id: int) -> list[NewsSourceRun]:
+        """Read only the newest attempt per source for a durable collection job."""
+        async with self.operation():
+            return list(await self.db_session.scalars(
+                select(NewsSourceRun).where(NewsSourceRun.job_id == job_id)
+                .distinct(NewsSourceRun.source_id)
+                .order_by(NewsSourceRun.source_id, NewsSourceRun.id.desc())
+            ))
+
+    async def observed_analysis_versions(self, run_ids: list[int]) -> list[dict[str, Any]]:
+        """Read distinct new/updated versions and their exact analysis in one batch.
+
+        Args:
+            run_ids: Latest attempts already selected for each source.
+
+        Returns:
+            Retained observation identity, current availability and latest exact-version job.
+        """
+        if not run_ids:
+            return []
+        async with self.operation():
+            latest_job_id = select(NewsJob.id).where(
+                NewsJob.kind == "analyze", NewsJob.item_id == NewsRunItem.item_id,
+                NewsJob.payload["content_hash"].astext == NewsRunItem.content_hash,
+            ).order_by(NewsJob.id.desc()).limit(1).correlate(NewsRunItem).scalar_subquery()
+            analyzed = exists(select(NewsAnalysis.id).where(
+                NewsAnalysis.item_id == NewsRunItem.item_id,
+                NewsAnalysis.content_hash == NewsRunItem.content_hash,
+            )).correlate(NewsRunItem)
+            statement = (
+                select(
+                    NewsRunItem.id.label("observation_id"), NewsRunItem.item_id,
+                    NewsRunItem.content_hash, NewsSourceRun.source_id,
+                    NewsItem.content_hash.label("current_hash"),
+                    NewsItem.status.label("item_status"), NewsItem.duplicate_of_id,
+                    func.greatest(func.length(NewsItem.content), func.length(NewsItem.excerpt)).label("text_length"),
+                    NewsJob.status.label("job_status"),
+                    analyzed.label("analyzed"),
+                )
+                .join(NewsSourceRun, NewsSourceRun.id == NewsRunItem.run_id)
+                .outerjoin(NewsItem, NewsItem.id == NewsRunItem.item_id)
+                .outerjoin(NewsJob, NewsJob.id == latest_job_id)
+                .where(NewsRunItem.run_id.in_(run_ids), NewsRunItem.outcome.in_(["new", "updated"]))
+                .order_by(NewsRunItem.id.desc())
+            )
+            # Duplicate observations from an attempt must not count provider work twice.
+            versions: dict[tuple[int | None, str | None, int | None], dict[str, Any]] = {}
+            for row in (await self.db_session.execute(statement)).mappings():
+                key = (row.item_id, row.content_hash, row.observation_id if row.item_id is None else None)
+                versions.setdefault(key, dict(row))
+            return list(versions.values())
+
     async def first_completed_at(self, source_id: int) -> datetime | None:
         """Recover the initial collection boundary for sources created before cursors stored it."""
         async with self.operation():

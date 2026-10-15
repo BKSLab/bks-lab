@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { axe } from "vitest-axe";
 
 vi.mock("@/lib/admin-api", () => ({ adminFetch: vi.fn(), requireAdmin: vi.fn() }));
@@ -22,16 +22,18 @@ import NewsSettingsPage from "@/app/(admin)/admin/news/settings/page";
 import NewsRunsPage from "@/app/(admin)/admin/news/runs/page";
 import NewsJobPage from "@/app/(admin)/admin/news/jobs/[slug]/page";
 import { adminFetch, requireAdmin } from "@/lib/admin-api";
-import { newsAnalysis, newsCategory, newsDecision, newsItem, newsJob, newsSettings, newsSource, newsTopic } from "./news-fixtures";
+import { newsAnalysis, newsCategory, newsCollectionStatus, newsDecision, newsItem, newsJob, newsSettings, newsSource, newsTopic } from "./news-fixtures";
 
 const paged = { items: [], total: 0, page: 1, page_size: 20, pages: 0 };
 const emptyParams = () => ({ searchParams: Promise.resolve({}) });
 
 beforeEach(() => {
+  vi.stubGlobal("fetch", vi.fn().mockImplementation(async () => new Response(JSON.stringify(newsCollectionStatus))));
   vi.mocked(adminFetch).mockReset();
   vi.mocked(requireAdmin).mockReset().mockResolvedValue({ username: "owner" });
   vi.mocked(adminFetch).mockImplementation(async path => {
     if (path === "/news/sources") return [newsSource];
+    if (path === "/news/collection-status") return newsCollectionStatus;
     if (path === "/news/topics") return [newsTopic];
     if (path === "/news/categories") return [newsCategory];
     if (path === "/news/items/4") return newsItem;
@@ -41,6 +43,7 @@ beforeEach(() => {
     return paged;
   });
 });
+afterEach(() => { vi.unstubAllGlobals(); });
 
 describe("protected editorial routes", () => {
   it.each([
@@ -65,8 +68,9 @@ describe("protected editorial routes", () => {
 
   it("loads only prepared sources and keeps management on one accessible screen", async () => {
     const { container } = render(<AdminLayout>{await NewsSourcesPage()}</AdminLayout>);
-    expect(adminFetch).toHaveBeenCalledExactlyOnceWith("/news/sources");
-    expect(screen.getByRole("heading", { name: newsSource.name })).toBeTruthy();
+    expect(adminFetch).toHaveBeenCalledWith("/news/sources");
+    expect(adminFetch).toHaveBeenCalledWith("/news/collection-status");
+    expect(screen.getByRole("rowheader").textContent).toContain(newsSource.name);
     expect(screen.getByText(newsSource.description)).toBeTruthy();
     expect(screen.getByRole("switch", { name: `Регулярная проверка: ${newsSource.name}` }).getAttribute("aria-checked")).toBe("false");
     expect(screen.getByText("Ежедневно · 08:00, 20:00")).toBeTruthy();
@@ -81,28 +85,28 @@ describe("protected editorial routes", () => {
   });
 
   it("keeps an empty prepared catalogue empty without manual connection actions", async () => {
-    vi.mocked(adminFetch).mockResolvedValue([]);
+    vi.mocked(adminFetch).mockImplementation(async path => path === "/news/collection-status" ? newsCollectionStatus : []);
     render(<AdminLayout>{await NewsSourcesPage()}</AdminLayout>);
     expect(screen.getByText("Готовых источников пока нет.")).toBeTruthy();
     expect(screen.queryByRole("switch")).toBeNull();
     expect(screen.queryByRole("button", { name: /Проверить/ })).toBeNull();
-    expect(adminFetch).toHaveBeenCalledExactlyOnceWith("/news/sources");
+    expect(adminFetch).toHaveBeenCalledWith("/news/sources");
   });
 
   it.each([
     ["all active sources", "Проверить все включённые", {}],
-    ["one paused source", `Проверить сейчас: ${newsSource.name}`, { source_slug: newsSource.slug }],
+    ["one paused source", `Проверить: ${newsSource.name}`, { source_slug: newsSource.slug }],
   ])("starts a manual check of %s directly from the sources page", async (_label, button, body) => {
-    const fetchMock = vi.fn()
-      .mockResolvedValueOnce(new Response(JSON.stringify({ job_id: 9, job_slug: newsJob.slug, status: "queued" }), { status: 202 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ ...newsJob, kind: "collect", result: {} })));
+    vi.mocked(adminFetch).mockImplementation(async path => path === "/news/sources" ? [{ ...newsSource, active: true }] : newsCollectionStatus);
+    const fetchMock = vi.fn().mockImplementation(async (_path: string, options: RequestInit) => new Response(JSON.stringify(options.method === "POST" ? { job_slug: newsJob.slug } : newsCollectionStatus), { status: options.method === "POST" ? 202 : 200 }));
     vi.stubGlobal("fetch", fetchMock);
     try {
       render(<AdminLayout>{await NewsSourcesPage()}</AdminLayout>);
       fireEvent.click(screen.getByRole("button", { name: button }));
-      await screen.findByRole("link", { name: "Открыть отчёт задания" });
-      expect(fetchMock.mock.calls[0][0]).toBe("/api/admin/news/jobs/collect");
-      expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual(body);
+      await screen.findByRole("link", { name: "Открыть отчёт" });
+      const call = fetchMock.mock.calls.find(([, options]) => options.method === "POST")!;
+      expect(call[0]).toBe("/api/admin/news/jobs/collect");
+      expect(JSON.parse(call[1].body)).toEqual(body);
     } finally { vi.unstubAllGlobals(); }
   });
 

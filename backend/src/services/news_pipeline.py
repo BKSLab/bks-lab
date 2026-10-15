@@ -227,6 +227,10 @@ class NewsPipeline:
             if job.source_id is not None:
                 source = await repositories.sources.get(job.source_id)
                 sources = [source] if source is not None else []
+            elif "collection_targets" in job.payload:
+                sources = await repositories.sources.list_collection_targets([
+                    target["source_id"] for target in job.payload["collection_targets"]
+                ])
             else:
                 sources = await repositories.sources.list_active()
         started_at = self._collection_time(job)

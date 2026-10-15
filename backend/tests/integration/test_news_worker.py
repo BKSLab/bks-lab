@@ -121,6 +121,34 @@ async def enqueue_collect(scope, source_id):
         return await repositories.jobs.enqueue("collect", source_id=source_id)
 
 
+async def test_manual_all_source_scope_stays_fixed_until_execution(worker_scope, pipeline, collector):
+    source = await add_source(worker_scope)
+    async with worker_scope() as repositories:
+        job = await repositories.jobs.enqueue("collect")
+        await repositories.sources.update_preferences(source.id, {"active": False})
+        later = await repositories.sources.create({
+            "name": "Later source", "url": "https://later.example/feed", "kind": "rss",
+            "profile_id": "fixture-later", "active": True, "config": {},
+            "topic_ids": [], "category_ids": [],
+        })
+    assert await pipeline.run_once(("collect",))
+    collector.fetch_profile.assert_awaited_once()
+    assert collector.fetch_profile.await_args.kwargs["profile_id"] == source.profile_id
+    async with worker_scope() as repositories:
+        finished = await repositories.jobs.get(job.id)
+        assert finished.status == "completed" and finished.result["sources_total"] == 1
+        await repositories.sources.update_preferences(later.id, {"active": False})
+        no_targets = await repositories.jobs.enqueue("collect")
+        assert no_targets.payload["collection_targets"] == []
+        await repositories.sources.update_preferences(source.id, {"active": True})
+    collector.fetch_profile.reset_mock()
+    assert await pipeline.run_once(("collect",))
+    collector.fetch_profile.assert_not_awaited()
+    async with worker_scope() as repositories:
+        finished = await repositories.jobs.get(no_targets.id)
+        assert finished.status == "completed" and finished.result["sources_total"] == 0
+
+
 @pytest.mark.asyncio
 async def test_collection_commits_before_failed_analysis_and_retry_limit(
     worker_scope, worker_config, pipeline, collector, analyzer, session_factory,

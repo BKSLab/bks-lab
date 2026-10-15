@@ -1,12 +1,12 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { AdminPagination } from "@/components/admin/AdminPagination";
-import { NewsJobLauncher } from "@/components/admin/news/NewsJobLauncher";
+import { NewsCollectionWorkspace } from "@/components/admin/news/NewsCollectionWorkspace";
 import { NewsShell } from "@/components/admin/news/NewsShell";
 import { adminFetch, requireAdmin } from "@/lib/admin-api";
 import { adminDate, adminHref, adminPage, type AdminSearchParams } from "@/lib/admin-api/params";
 import { jobStatusLabels, newsSlug } from "@/lib/news-api/params";
-import type { NewsPaged, NewsRun, NewsSource } from "@/lib/news-api/types";
+import type { NewsCollectionStatus, NewsPaged, NewsRun, NewsSource } from "@/lib/news-api/types";
 
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "Запуски сбора" };
@@ -16,9 +16,9 @@ export default async function NewsRunsPage({ searchParams }: { searchParams: Pro
   const query = await searchParams;
   const page = adminPage(query.page);
   const filters = { source_slug: newsSlug(query.source_slug) };
-  const [data, sources] = await Promise.all([adminFetch<NewsPaged<NewsRun>>(adminHref("/news/runs", { ...filters, page, page_size: 20 })), adminFetch<NewsSource[]>("/news/sources")]);
+  const [data, sources, status] = await Promise.all([adminFetch<NewsPaged<NewsRun>>(adminHref("/news/runs", { ...filters, page, page_size: 20 })), adminFetch<NewsSource[]>("/news/sources"), adminFetch<NewsCollectionStatus>("/news/collection-status")]);
   return <NewsShell username={user.username} current="runs" title="Запуски и история" description="Ручной сбор выполняется в фоне. После создания задания можно закрыть страницу и вернуться по его ссылке.">
-    <section className="admin-section news-stack" aria-labelledby="news-run-heading"><h2 id="news-run-heading">Запустить сбор</h2>{sources.length ? <NewsJobLauncher sources={sources} /> : <p className="admin-empty">Сначала <Link className="admin-link" prefetch={false} href="/admin/news/sources">откройте источники</Link>.</p>}</section>
+    <section className="admin-section news-stack" aria-labelledby="news-run-heading"><h2 id="news-run-heading">Запустить сбор</h2><NewsCollectionWorkspace mode="runs" initialSources={sources} initialStatus={status} /></section>
     <section className="admin-section" aria-labelledby="news-runs-heading"><h2 id="news-runs-heading">История обходов</h2>
       <form action="/admin/news/runs" method="get" className="admin-filters news-filters"><div className="admin-field"><label htmlFor="news-history-source">Источник</label><select id="news-history-source" name="source_slug" defaultValue={filters.source_slug}><option value="">Все источники</option>{sources.map(source => <option key={source.slug} value={source.slug}>{source.name}</option>)}</select></div><button className="admin-button" type="submit">Применить</button><Link className="admin-button" prefetch={false} href="/admin/news/runs">Сбросить</Link></form>
       {data.items.length ? <table className="admin-table admin-card-table" role="table"><caption>Время — UTC. Новые и изменённые материалы сохраняются до анализа моделью.</caption>

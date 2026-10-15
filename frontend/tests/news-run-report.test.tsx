@@ -14,7 +14,7 @@ import { NewsRunReport } from "@/components/admin/news/NewsRunReport";
 import { adminFetch, requireAdmin } from "@/lib/admin-api";
 import { newsDuration, newsRunFilters, newsSlug } from "@/lib/news-api/params";
 import type { NewsPaged, NewsRunItem } from "@/lib/news-api/types";
-import { newsCollectJob, newsJob, newsRun, newsRunItem, newsSource } from "./news-fixtures";
+import { newsCollectJob, newsCollectionStatus, newsJob, newsRun, newsRunItem, newsSource } from "./news-fixtures";
 
 const paged = <T,>(items: T[], extra: Partial<NewsPaged<T>> = {}): NewsPaged<T> => ({ items, total: items.length, page: 1, page_size: 20, ...extra });
 const filters = { source_slug: "", outcome: "", warnings_only: "" };
@@ -31,6 +31,7 @@ beforeEach(() => {
     if (path.startsWith(`/news/jobs/${newsCollectJob.slug}/items?`)) return paged([newsRunItem]);
     if (path.startsWith("/news/runs?")) return paged([newsRun]);
     if (path === "/news/sources") return [newsSource];
+    if (path === "/news/collection-status") return newsCollectionStatus;
     if (path === `/news/sources/${newsSource.slug}`) return newsSource;
     return [];
   });
@@ -142,6 +143,7 @@ describe("collection run report", () => {
   });
 
   it("links report sources to their row on the unified sources screen", async () => {
+    fetchMock.mockResolvedValue(json(newsCollectionStatus));
     render(<AdminLayout>{await NewsRunsPage({ searchParams: Promise.resolve({}) })}</AdminLayout>);
     const link = screen.getByRole("link", { name: newsSource.name });
     expect(link.getAttribute("href")).toBe(`/admin/news/sources#${newsSource.slug}`);

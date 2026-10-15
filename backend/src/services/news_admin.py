@@ -40,6 +40,12 @@ from src.schemas.news import (
 )
 from src.schemas.pagination import Paged
 from src.schemas.news_collection import NEWS_MIN_CONTENT_CHARS
+from src.schemas.news_collection_status import (
+    CollectionAnalysisStatus,
+    CollectionJobStatus,
+    CollectionSourceStatus,
+    CollectionStatus,
+)
 
 
 class NewsAdminService:
@@ -220,6 +226,129 @@ class NewsAdminService:
             raise NewsNotFoundError
         job = await self.jobs.enqueue("collect", source_id=source.id if source else None)
         return QueuedJob(job_id=job.id, job_slug=job.slug, status=job.status)
+
+    async def collection_status(self, job_slug: str | None = None) -> CollectionStatus:
+        """Restore collection and exact-version analysis progress from durable records.
+
+        Args:
+            job_slug: Optional explicit collection, including one just queued by the caller.
+
+        Returns:
+            Safe source and overall counters; unschedulable analysis never implies activity.
+
+        Raises:
+            NewsNotFoundError: An explicit address is missing or is not a collection.
+        """
+        stored = await self.settings.get()
+        enabled = stored.get("enabled", self.config.enabled)
+        selected, active_count = await self.jobs.collection_status_context(
+            llm_configured=self.config.llm_configured, auto_enabled=enabled,
+        )
+        job = await self.jobs.get_by_slug(job_slug) if job_slug is not None else selected
+        if job_slug is not None and (job is None or job.kind != "collect"):
+            raise NewsNotFoundError
+        result = CollectionStatus(active_jobs=active_count)
+        if job is None:
+            return result
+        source = job.source
+        result.job = CollectionJobStatus(
+            slug=job.slug, status=job.status,
+            source_slug=source.slug if source else None,
+            source_name=source.name if source else None,
+            created_at=job.created_at, started_at=job.started_at,
+            completed_at=job.completed_at, error=job.error,
+        )
+        runs = await self.runs.latest_for_job(job.id)
+        targets = {
+            target["source_id"]: (target["source_slug"], target["source_name"])
+            for target in job.payload.get("collection_targets", [])
+        }
+        if source is not None:
+            targets[source.id] = (source.slug, source.name)
+        elif "collection_targets" not in job.payload and job.status in {"queued", "running"}:
+            # Existing jobs predate scope snapshots; their recorded attempts remain authoritative.
+            targets.update({row.id: (row.slug, row.name) for row in await self.sources.list_active()})
+        targets.update({run.source_id: (run.source_slug, run.source_name) for run in runs})
+        latest = {run.source_id: run for run in runs}
+        statuses: dict[int, CollectionSourceStatus] = {}
+        for source_id, (slug, name) in targets.items():
+            run = latest.get(source_id)
+            state = run.status if run else "queued"
+            error = run.error if run else None
+            if state == "running" and job.status != "running":
+                state = job.status if job.status in {"queued", "failed", "cancelled"} else "failed"
+            if state == "running" and job.started_at and run.started_at < job.started_at:
+                state = "queued"
+            if run is None and job.status not in {"queued", "running"}:
+                state = "failed" if job.status == "failed" else "cancelled"
+                error = job.error or "Источник не был обработан в этом задании."
+            statuses[source_id] = CollectionSourceStatus(
+                source_slug=slug, source_name=name, status=state,
+                new=run.new_count if run else 0, updated=run.updated_count if run else 0,
+                unchanged=run.unchanged_count if run else 0, skipped=run.skipped_count if run else 0,
+                warnings=run.warning_count if run else 0, error=error,
+            )
+        observations = await self.runs.observed_analysis_versions([run.id for run in runs])
+        for version in observations:
+            state, reason = self._observed_analysis_state(version, enabled=enabled)
+            self._count_analysis(result.analysis, state, reason)
+            self._count_analysis(statuses[version["source_id"]].analysis, state, reason)
+        result.sources = list(statuses.values())
+        counters = result.collection
+        counters.sources_total = len(result.sources)
+        for row in result.sources:
+            if row.status == "queued":
+                counters.sources_queued += 1
+            elif row.status == "running":
+                counters.sources_running += 1
+            else:
+                counters.sources_done += 1
+                if row.status == "completed":
+                    counters.sources_completed += 1
+                else:
+                    counters.sources_failed += 1
+            for field in ("new", "updated", "unchanged", "skipped", "warnings"):
+                setattr(counters, field, getattr(counters, field) + getattr(row, field))
+        result.busy = (job.status in {"queued", "running"} and counters.sources_total > 0) or bool(
+            result.analysis.queued + result.analysis.running + result.analysis.pending
+        )
+        return result
+
+    def _observed_analysis_state(self, version: dict[str, Any], *, enabled: bool) -> tuple[str, str | None]:
+        """Classify only the observed hash and explain why pending work cannot run."""
+        state = version["job_status"]
+        current = version["content_hash"] == version["current_hash"] and version["item_id"] is not None
+        available = current and version["duplicate_of_id"] is None
+        if available and state == "running":
+            return "running", None
+        if available and state == "queued":
+            if (version["text_length"] or 0) < NEWS_MIN_CONTENT_CHARS:
+                return "blocked", "insufficient_text"
+            return ("queued", None) if self.config.llm_configured else ("blocked", "missing_llm")
+        if state in {"failed", "cancelled"}:
+            return "failed", None
+        if version["analyzed"]:
+            return "completed", None
+        if not available or state == "completed":
+            return "blocked", "unavailable"
+        if (version["text_length"] or 0) < NEWS_MIN_CONTENT_CHARS:
+            return "blocked", "insufficient_text"
+        if not self.config.llm_configured:
+            return "blocked", "missing_llm"
+        # Already queued explicit jobs still run while automatic backlog enqueueing is paused.
+        if not enabled:
+            return "blocked", "paused"
+        if version["item_status"] != "pending_analysis":
+            return "blocked", "unavailable"
+        return "pending", None
+
+    @staticmethod
+    def _count_analysis(counters: CollectionAnalysisStatus, state: str, reason: str | None) -> None:
+        counters.total += 1
+        setattr(counters, state, getattr(counters, state) + 1)
+        if reason is not None:
+            reasons = counters.blocked_reasons
+            setattr(reasons, reason, getattr(reasons, reason) + 1)
 
     async def get_job(self, job_slug: str) -> JobRow:
         """Read progress without exposing lease ownership or request internals."""

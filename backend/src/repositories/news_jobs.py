@@ -3,9 +3,9 @@
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlsplit
 
-from sqlalchemy import func, select, text, update
+from sqlalchemy import and_, case, exists, func, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert
-from sqlalchemy.orm import joinedload
+from sqlalchemy.orm import aliased, joinedload
 
 from src.core.news_slugs import JOB_SLUG_MAX, job_slug_base, readable_slug
 from src.core.news_source_schedule import (
@@ -13,9 +13,12 @@ from src.core.news_source_schedule import (
 )
 from src.db.models.news_jobs import NewsJob, NewsSourceRun
 from src.db.models.news_items import NewsItem
+from src.db.models.news_analyses import NewsAnalysis
+from src.db.models.news_run_items import NewsRunItem
 from src.db.models.news_sources import NewsSource
 from src.db.models.news_settings import NewsSetting
 from src.repositories.news_base import NewsRepository
+from src.schemas.news_collection import NEWS_MIN_CONTENT_CHARS
 
 QUEUE_LOCK = 721409081
 SCHEDULE_LOCK = SOURCE_SCHEDULE_LOCK
@@ -23,6 +26,71 @@ JOB_SLUG_LOCK = 721409084
 
 
 class NewsJobRepository(NewsRepository):
+    async def collection_status_context(
+        self, *, llm_configured: bool, auto_enabled: bool,
+    ) -> tuple[NewsJob | None, int]:
+        """Prefer active collection, then terminal work with runnable exact-version analysis.
+
+        Returns:
+            Selected collection and the independent count of active collection jobs.
+        """
+        async with self.operation():
+            analysis_job = aliased(NewsJob)
+            previous_run = aliased(NewsSourceRun)
+            latest_run_ids = select(func.max(previous_run.id)).where(
+                previous_run.job_id == NewsJob.id,
+            ).group_by(previous_run.source_id).correlate(NewsJob)
+            exact_jobs = select(analysis_job.id).where(
+                analysis_job.kind == "analyze", analysis_job.item_id == NewsRunItem.item_id,
+                analysis_job.payload["content_hash"].astext == NewsRunItem.content_hash,
+            ).correlate(NewsRunItem)
+            active_analysis = exists(exact_jobs.where(or_(
+                analysis_job.status == "running",
+                and_(analysis_job.status == "queued", llm_configured),
+            )))
+            analyzed = exists(select(NewsAnalysis.id).where(
+                NewsAnalysis.item_id == NewsRunItem.item_id,
+                NewsAnalysis.content_hash == NewsRunItem.content_hash,
+            ).correlate(NewsRunItem))
+            pending = and_(
+                llm_configured, auto_enabled, NewsItem.status == "pending_analysis",
+                ~exists(exact_jobs), ~analyzed,
+            )
+            runnable_analysis = exists(
+                select(NewsRunItem.id)
+                .join(NewsSourceRun, NewsSourceRun.id == NewsRunItem.run_id)
+                .join(NewsItem, NewsItem.id == NewsRunItem.item_id)
+                .where(
+                    NewsSourceRun.job_id == NewsJob.id,
+                    NewsSourceRun.id.in_(latest_run_ids),
+                    NewsRunItem.outcome.in_(["new", "updated"]),
+                    NewsItem.content_hash == NewsRunItem.content_hash,
+                    NewsItem.duplicate_of_id.is_(None),
+                    func.greatest(func.length(NewsItem.content), func.length(NewsItem.excerpt))
+                    >= NEWS_MIN_CONTENT_CHARS,
+                    or_(active_analysis, pending),
+                ).correlate(NewsJob)
+            )
+            priority = case(
+                (NewsJob.status == "running", 0),
+                (NewsJob.status == "queued", 1),
+                (runnable_analysis, 2), else_=3,
+            )
+            active = NewsJob.status.in_(["queued", "running"])
+            count = await self.db_session.scalar(select(func.count()).select_from(NewsJob).where(
+                NewsJob.kind == "collect", active,
+            ))
+            job = await self.db_session.scalar(
+                select(NewsJob).where(NewsJob.kind == "collect")
+                .options(joinedload(NewsJob.source))
+                .order_by(
+                    priority,
+                    case((active, NewsJob.created_at)).asc(),
+                    func.coalesce(NewsJob.completed_at, NewsJob.created_at).desc(), NewsJob.id.desc(),
+                ).limit(1)
+            )
+            return job, count or 0
+
     async def _new_slug(
         self, kind: str, *, source_id: int | None = None,
         item_id: int | None = None, payload: dict | None = None,
@@ -130,6 +198,16 @@ class NewsJobRepository(NewsRepository):
     ) -> NewsJob:
         """Enqueue once per identity; only explicit retries revive terminal failures."""
         async with self.operation():
+            if kind == "collect" and source_id is None and "collection_targets" not in (payload or {}):
+                targets = (await self.db_session.execute(
+                    select(NewsSource.id, NewsSource.slug, NewsSource.name).where(
+                        NewsSource.profile_id.is_not(None), NewsSource.active.is_(True),
+                    ).order_by(NewsSource.priority.desc(), NewsSource.id)
+                )).all()
+                payload = {**(payload or {}), "collection_targets": [
+                    {"source_id": row.id, "source_slug": row.slug, "source_name": row.name}
+                    for row in targets
+                ]}
             if kind == "analyze" and item_id is not None and (payload or {}).get("content_hash"):
                 # Manual repair and automatic backlog refresh must not race into two provider calls.
                 await self.db_session.execute(

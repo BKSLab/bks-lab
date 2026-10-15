@@ -52,6 +52,16 @@ class NewsSourceRepository(NewsRepository):
         """Return sources eligible for automatic collection."""
         return await self.list(active_only=True)
 
+    async def list_collection_targets(self, source_ids: list[int]) -> list[NewsSource]:
+        """Resolve an immutable manual collection scope without rereading enablement."""
+        if not source_ids:
+            return []
+        async with self.operation():
+            return list(await self.db_session.scalars(
+                self.query().where(NewsSource.id.in_(source_ids), NewsSource.profile_id.is_not(None))
+                .order_by(NewsSource.priority.desc(), NewsSource.id)
+            ))
+
     async def synchronize_profiles(self, values: list[dict]) -> list[NewsSource]:
         """Sync verified metadata, retaining existing preferences, identities and history.
 

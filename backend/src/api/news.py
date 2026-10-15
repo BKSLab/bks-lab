@@ -34,6 +34,7 @@ from src.schemas.news import (
     SourceRow,
 )
 from src.schemas.pagination import Paged
+from src.schemas.news_collection_status import CollectionStatus
 
 logger = logging.getLogger(__name__)
 
@@ -316,6 +317,22 @@ async def reanalyze(item_id: RowID, service: NewsAdminServiceDep) -> QueuedJob:
 async def collect(data: CollectRequest, service: NewsAdminServiceDep) -> QueuedJob:
     """Queue a collection run without fetching within the API process."""
     return await service.collect(data)
+
+
+@router.get(
+    "/collection-status",
+    response_model=CollectionStatus,
+    summary="Read durable collection and analysis progress",
+    description="Restore source and overall progress for an explicit collection or the most relevant durable job.",
+    operation_id="newsCollectionStatus",
+    response_description="Safe collection targets and exact-version analysis counters.",
+)
+async def collection_status(
+    service: NewsAdminServiceDep,
+    job_slug: Annotated[NewsSlug | None, Query(description="Optional stable collection job address.")] = None,
+) -> CollectionStatus:
+    """Read saved progress without keeping a database connection open between polls."""
+    return await service.collection_status(job_slug)
 
 
 @router.get(

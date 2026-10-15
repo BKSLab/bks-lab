@@ -181,3 +181,58 @@ export interface NewsSettings {
   llm_provider: string;
   llm_model: string;
 }
+
+export interface NewsCollectionAnalysis {
+  scope: "new_updated";
+  total: number;
+  queued: number;
+  running: number;
+  completed: number;
+  failed: number;
+  blocked: number;
+  pending: number;
+  blocked_reasons: { missing_llm: number; paused: number; insufficient_text: number; unavailable: number };
+}
+
+export interface NewsCollectionSourceStatus {
+  source_slug: string;
+  source_name: string;
+  status: "queued" | "running" | "completed" | "failed" | "cancelled";
+  new: number;
+  updated: number;
+  unchanged: number;
+  skipped: number;
+  warnings: number;
+  analysis: NewsCollectionAnalysis;
+  error: string | null;
+}
+
+export interface NewsCollectionStatus {
+  job: {
+    slug: string;
+    status: NewsJobStatus;
+    source_slug: string | null;
+    source_name: string | null;
+    created_at: string;
+    started_at: string | null;
+    completed_at: string | null;
+    error: string | null;
+  } | null;
+  busy: boolean;
+  collection: {
+    sources_total: number;
+    sources_done: number;
+    sources_queued: number;
+    sources_running: number;
+    sources_completed: number;
+    sources_failed: number;
+    new: number;
+    updated: number;
+    unchanged: number;
+    skipped: number;
+    warnings: number;
+  };
+  analysis: NewsCollectionAnalysis;
+  sources: NewsCollectionSourceStatus[];
+  active_jobs: number;
+}

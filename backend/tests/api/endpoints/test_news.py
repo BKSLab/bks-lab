@@ -33,6 +33,7 @@ ROUTES = [
     ("POST", "/items/1/decision"),
     ("POST", "/items/1/reanalyze"),
     ("POST", "/jobs/collect"),
+    ("GET", "/collection-status"),
     ("GET", "/jobs/example-2026-10-15-140000"),
     ("GET", "/jobs/example-2026-10-15-140000/runs"),
     ("GET", "/jobs/example-2026-10-15-140000/items"),
@@ -156,6 +157,31 @@ async def test_manual_collection_can_check_an_inactive_verified_source(client, d
     job = await NewsJobRepository(db_session).get(response.json()["job_id"])
     assert job.source_id == source.id
     assert "scheduled_slot" not in job.payload
+
+
+async def test_collection_status_restores_safe_scope_and_rejects_noncollection_slugs(client, db_session):
+    source = await add_source(db_session)
+    await login(client)
+    empty = await client.get("/api/admin/news/collection-status")
+    assert empty.status_code == 200 and empty.headers["cache-control"] == "no-store"
+    assert empty.json()["job"] is None and empty.json()["sources"] == []
+    queued = await client.post("/api/admin/news/jobs/collect", json={}, headers=ORIGIN)
+    slug = queued.json()["job_slug"]
+    restored = await client.get("/api/admin/news/collection-status", params={"job_slug": slug})
+    assert restored.status_code == 200 and restored.headers["cache-control"] == "no-store"
+    body = restored.json()
+    assert body["job"]["slug"] == slug and body["busy"] is True
+    assert body["collection"]["sources_total"] == body["collection"]["sources_queued"] == 1
+    assert body["sources"][0]["source_slug"] == source.slug
+    assert body["analysis"]["scope"] == body["sources"][0]["analysis"]["scope"] == "new_updated"
+    assert not {"id", "source_id", "item_id", "owner_token", "payload", "result"} & body["job"].keys()
+    assert not {"id", "source_id", "item_id"} & body["sources"][0].keys()
+    jobs = NewsJobRepository(db_session)
+    discovery = await jobs.enqueue("discover", payload={"url": "https://example.org/feed"})
+    for address in ("missing-collection", discovery.slug):
+        response = await client.get("/api/admin/news/collection-status", params={"job_slug": address})
+        assert response.status_code == 404 and response.headers["cache-control"] == "no-store"
+    assert (await client.get("/api/admin/news/collection-status?job_slug=123")).status_code == 422
 
 
 async def test_catalog_validation_and_conflicts_map_to_safe_statuses(client):

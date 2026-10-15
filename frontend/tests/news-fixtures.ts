@@ -1,4 +1,4 @@
-import type { NewsAnalysis, NewsDecision, NewsItemDetail, NewsJob, NewsRun, NewsRunItem, NewsSettings, NewsSource, NewsTaxonomy } from "@/lib/news-api/types";
+import type { NewsAnalysis, NewsCollectionStatus, NewsDecision, NewsItemDetail, NewsJob, NewsRun, NewsRunItem, NewsSettings, NewsSource, NewsTaxonomy } from "@/lib/news-api/types";
 
 export const newsDecision: NewsDecision = {
   id: 1, decision: "in_work", format: "short_news_candidate", comment: "Проверить цифры", editor: "owner", created_at: "2026-10-14T08:00:00Z",
@@ -53,4 +53,10 @@ export const newsSettings: NewsSettings = {
   article_weights: { topical_fit: 35, significance: 25, freshness: 10, article_potential: 30 },
   initial_lookback_days: 30, max_items_per_source: 50, max_excerpt_chars: 3000, analysis_batch_size: 20, text_retention_days: 90, history_retention_days: 180,
   llm_configured: true, llm_provider: "provider", llm_model: "example/model",
+};
+
+export const newsCollectionStatus: NewsCollectionStatus = {
+  job: null, busy: false, active_jobs: 0, sources: [],
+  collection: { sources_total: 0, sources_done: 0, sources_queued: 0, sources_running: 0, sources_completed: 0, sources_failed: 0, new: 0, updated: 0, unchanged: 0, skipped: 0, warnings: 0 },
+  analysis: { scope: "new_updated", total: 0, queued: 0, running: 0, completed: 0, failed: 0, blocked: 0, pending: 0, blocked_reasons: { missing_llm: 0, paused: 0, insufficient_text: 0, unavailable: 0 } },
 };
