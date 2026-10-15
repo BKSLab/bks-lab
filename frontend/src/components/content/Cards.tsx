@@ -4,6 +4,7 @@ import Link from "next/link";
 import type { ArticleSummary, Note, ProjectSummary } from "@/lib/api/types";
 import { CATEGORY_TITLES, formatDate } from "@/lib/content";
 import { ArrowRightIcon } from "@/components/ui/icons";
+import { NoteEntry } from "./NoteEntry";
 
 export function Tags({ tags }: { tags: string[] }) {
   return (
@@ -135,23 +136,5 @@ export function ProjectCard({
 }
 
 export function NotePreview({ note }: { note: Note }) {
-  return (
-    <article className="border-t border-border py-5">
-      <time
-        dateTime={note.published_at}
-        className="font-mono text-sm text-text-muted"
-      >
-        {formatDate(note.published_at)}
-      </time>
-      <h3 className="mt-2 text-lg leading-snug font-semibold">
-        <Link
-          href={`/notes#note-${note.slug}`}
-          className="inline-flex min-h-11 items-center hover:text-accent hover:underline"
-        >
-          {note.title}
-        </Link>
-      </h3>
-      <p className="mt-2 text-base text-text-muted">{note.excerpt}</p>
-    </article>
-  );
+  return <NoteEntry note={note} compact preview />;
 }

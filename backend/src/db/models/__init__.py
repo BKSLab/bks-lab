@@ -16,9 +16,10 @@ from src.db.models.news_analyses import NewsAnalysis, NewsEditorialDecision
 from src.db.models.news_jobs import NewsJob, NewsSourceRun
 from src.db.models.news_run_items import NewsRunItem
 from src.db.models.news_settings import NewsSetting
+from src.db.models.news_notes import NewsNoteQueue, NewsNoteSetting
 
 __all__ = [
     "Base", "AdminSession", "ContentItem", "ContentRevision", "MediaFile", "PageView", "Subscriber", "FeedbackMessage", "NewsCategory",
     "NewsTopic", "NewsSource", "NewsSourceCatalogueEntry", "NewsItem", "NewsAnalysis", "NewsEditorialDecision",
-    "NewsJob", "NewsSourceRun", "NewsRunItem", "NewsSetting",
+    "NewsJob", "NewsSourceRun", "NewsRunItem", "NewsSetting", "NewsNoteQueue", "NewsNoteSetting",
 ]

@@ -56,6 +56,34 @@ async def test_invalid_json_then_valid_schema_retries_and_keeps_reference_payloa
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("candidate", [
+    {"title": "я" * 91, "text": "Текст."},
+    {"title": "Заголовок", "text": "я" * 301},
+    {"title": "Заголовок", "text": "Текст.", "source_url": "https://injected.example"},
+    {"title": "Заголовок", "text": "[Текст](https://injected.example)"},
+    {"title": "English only", "text": "Текст."},
+])
+async def test_invalid_optional_note_keeps_classification_without_second_llm_request(candidate):
+    requests = []
+
+    async def handler(request):
+        requests.append(request)
+        return reply(json.dumps(classification(note_candidate=candidate)))
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        result = await reference_client(http).get_llm_response("snippet", "system", schema=NewsAnalysisResult)
+    assert result.note_candidate is None and result.is_relevant is True
+    assert result.summary_ru == "Описание новости."
+    assert len(requests) == 1
+
+
+def test_candidate_allows_exact_character_bounds_including_internal_spaces():
+    candidate = {"title": "я" * 43 + " " + "я" * 46, "text": "а" * 149 + " " + "б" * 150}
+    result = NewsAnalysisResult.model_validate(classification(note_candidate=candidate))
+    assert result.note_candidate.model_dump() == candidate
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("status,attempts", [(429, 2), (500, 2), (401, 1), (403, 1), (402, 1)])
 async def test_http_retry_policy_and_no_secrets_in_logs(status, attempts, caplog):
     count = 0
@@ -178,7 +206,7 @@ async def test_service_overrides_model_freshness_before_both_weighted_scores(pub
     assert result["scores"]["freshness"] == expected
     assert result["news_score"] == 57.5 + 0.3 * expected
     assert result["article_score"] == 68.5 + 0.1 * expected
-    assert NEWS_PROMPT_VERSION == "news-v3"
+    assert NEWS_PROMPT_VERSION == "news-v4-notes"
     clock.assert_called_once_with()
     content, prompt = client.get_llm_response.call_args.args
     policy = json.loads(prompt.split("Editorial policy and schema:\n", 1)[1])

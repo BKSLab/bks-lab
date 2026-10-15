@@ -5,10 +5,12 @@ import type {
   ArticleSummary,
   Category,
   Note,
+  NotesFeedPage,
   Paged,
   ProjectDetail,
   ProjectSummary,
 } from "./types";
+import { notesFeedPath, type NotesFeedParams } from "./notes-feed";
 
 export const API_TIMEOUT_MS = 5000;
 export const API_REVALIDATE_SECONDS = 300;
@@ -184,6 +186,18 @@ export async function getLatestNotes(limit = 3): Promise<Note[]> {
   return withUnavailableFallback(
     apiFetch<Note[]>(`/notes/latest?limit=${limit}`, { tags: ["notes"] }),
     [],
+  );
+}
+
+export async function getNotesFeed(
+  params: NotesFeedParams = {},
+): Promise<NotesFeedPage> {
+  return withUnavailableFallback(
+    apiFetch<NotesFeedPage>(notesFeedPath(params), {
+      tags: ["notes"],
+      revalidate: 60,
+    }),
+    { items: [], next_cursor: null, newest_cursor: null, has_more: false },
   );
 }
 

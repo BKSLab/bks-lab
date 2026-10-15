@@ -3,9 +3,9 @@ import Link from "next/link";
 import { Container } from "@/components/layout/Container";
 import {
   ArticleCard,
-  NotePreview,
   ProjectCard,
 } from "@/components/content/Cards";
+import { NotesFeed } from "@/components/content/NotesFeed";
 import { SectionHeading } from "@/components/content/SectionHeading";
 import {
   AccessibilityIcon,
@@ -14,7 +14,7 @@ import {
   CodeIcon,
   ManagementIcon,
 } from "@/components/ui/icons";
-import { getLatestArticles, getLatestNotes, getProjects } from "@/lib/api";
+import { getLatestArticles, getNotesFeed, getProjects } from "@/lib/api";
 
 const directions = [
   {
@@ -39,7 +39,7 @@ export async function HomeContent() {
   const [projects, articles, notes] = await Promise.all([
     getProjects({ featured: true }),
     getLatestArticles(3),
-    getLatestNotes(5),
+    getNotesFeed({ limit: 5 }),
   ]);
   return (
     <>
@@ -134,12 +134,7 @@ export async function HomeContent() {
           <h2 id="home-notes-title" className="mb-5 text-2xl font-bold">
             Заметки на полях
           </h2>
-          {notes.map((note) => (
-            <NotePreview key={note.slug} note={note} />
-          ))}
-          {!notes.length && (
-            <p className="py-5 text-text-muted">Заметки скоро появятся.</p>
-          )}
+          <NotesFeed initialFeed={notes} compact pageSize={5} />
           <Link href="/notes" className="text-link mt-3">
             Все заметки <ArrowRightIcon className="h-4 w-4" />
           </Link>

@@ -390,3 +390,32 @@
   .news-collection-progress { border-color: CanvasText; }
   .news-collection-stage progress { appearance: auto; }
 }
+
+.news-notes-workspace { gap: 2rem; }
+.news-note-settings { border: 1px solid var(--color-border); border-radius: 10px; background: var(--color-surface); padding: 1.25rem; }
+.news-note-settings-heading, .news-note-queue-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.5rem 1rem; margin-bottom: 1rem; }
+.news-note-settings-heading h2, .news-note-queue-heading h2 { margin: 0; }
+.news-note-settings-fields { display: flex; flex-wrap: wrap; align-items: end; gap: 1rem; min-width: 0; border: 0; padding: 0; }
+.news-note-settings-fields > .admin-field { flex: 1 1 14rem; }
+.news-note-settings-fields > .admin-button { flex: 0 1 auto; }
+.news-note-schedule { display: flex; flex-wrap: wrap; gap: 0.35rem 1.5rem; margin-top: 0.85rem; font-size: 0.875rem; }
+.news-note-filters { margin-bottom: 1rem; }
+.news-note-list { list-style: none; margin: 0; padding: 0; }
+.news-note-list > li { border-top: 1px solid var(--color-border); padding-block: 1.25rem; }
+.news-note-list > li:last-child { border-bottom: 1px solid var(--color-border); }
+.news-note-entry { display: flex; flex-direction: column; gap: 0.6rem; min-width: 0; overflow-wrap: anywhere; }
+.news-note-entry h3 { font-size: 1.125rem; line-height: 1.45; font-weight: 650; }
+.news-note-text { max-width: 80ch; white-space: pre-wrap; }
+.news-note-meta { font-size: 0.875rem; }
+.news-note-meta .admin-link { display: inline-flex; align-items: center; min-height: 44px; }
+.news-note-actions { margin-top: 0.25rem; }
+.news-note-dialog-panel textarea { width: 100%; min-height: 8rem; resize: vertical; border: 1px solid var(--color-control-border); border-radius: 6px; padding: 0.65rem 0.75rem; background: var(--color-surface); color: var(--color-text); font: inherit; }
+
+@media (max-width: 767px) {
+  .news-note-settings { padding: 1rem; }
+  .news-note-settings-fields > .admin-button { flex-basis: 100%; }
+}
+
+@media (forced-colors: active) {
+  .news-note-settings, .news-note-list > li { border-color: CanvasText; }
+}

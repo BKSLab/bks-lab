@@ -8,7 +8,7 @@ Existing Markdown files under `content/` are imported once by
 
 from datetime import date, datetime
 
-from sqlalchemy import Boolean, Date, DateTime, Integer, String, Text, UniqueConstraint, false, func
+from sqlalchemy import Boolean, Date, DateTime, Index, Integer, String, Text, UniqueConstraint, false, func, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -24,6 +24,7 @@ class ContentItem(Base):
 
     __table_args__ = (
         UniqueConstraint("type", "slug", name="uq_content_items_type_slug"),
+        Index("ix_content_items_note_feed", text("COALESCE(published_at_time, (published_at::timestamp without time zone AT TIME ZONE 'UTC'::text))"), "id", postgresql_where=text("type = 'note' AND status = 'active'")),
     )
 
     # Fetch server-generated timestamps (created_at/updated_at) via RETURNING
@@ -64,6 +65,17 @@ class ContentItem(Base):
         Date,
         nullable=True,
         comment="Publication date; null for projects (not dated).",
+    )
+    published_at_time: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True,
+        doc="Actual first publication instant, independent from the editable date.",
+        comment="Actual first publication instant, independent from the editable date.",
+    )
+    source_name: Mapped[str | None] = mapped_column(
+        Text, nullable=True, doc="Automatic note source name snapshot.", comment="Automatic note source name snapshot.",
+    )
+    source_url: Mapped[str | None] = mapped_column(
+        Text, nullable=True, doc="Automatic note exact source URL snapshot.", comment="Automatic note exact source URL snapshot.",
     )
     reading_time: Mapped[int | None] = mapped_column(
         Integer,

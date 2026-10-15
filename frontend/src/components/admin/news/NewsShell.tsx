@@ -5,6 +5,7 @@ import { AdminShell } from "@/components/admin/AdminShell";
 const sections = [
   { key: "items", href: "/admin/news/items", label: "Подборки" },
   { key: "plan", href: "/admin/news/plan", label: "План публикаций" },
+  { key: "notes", href: "/admin/news/notes", label: "Заметки" },
   { key: "sources", href: "/admin/news/sources", label: "Источники" },
   { key: "topics", href: "/admin/news/topics", label: "Темы и рубрики" },
   { key: "runs", href: "/admin/news/runs", label: "Запуски" },

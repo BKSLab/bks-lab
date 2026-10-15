@@ -12,7 +12,7 @@ const articles: ArticleSummary[] = Array.from({ length: 56 }, (_, index) => ({
   category: "development", published_at: new Date(Date.UTC(2026, 9, 8 - index)).toISOString(),
   reading_time: 3, cover_image: "/images/articles/accessibility.webp", tags: [],
 }));
-const notes: Note[] = Array.from({ length: 7 }, (_, index) => ({
+const notes: Note[] = Array.from({ length: 41 }, (_, index) => ({
   slug: `note-${index + 1}`, title: `Note ${index + 1}`, excerpt: "Summary",
   published_at: new Date(Date.UTC(2026, 9, 8 - index)).toISOString(),
   reading_time: 1, tags: [], related_article: null, content_html: "<p>Note</p>",
@@ -49,7 +49,7 @@ describe("public sitemap", () => {
     expect(urls.some((url) => /#|\?|\/admin|\/api/.test(url))).toBe(false);
     expect(new Set(urls).size).toBe(urls.length);
     expect(result.find((entry) => entry.url.endsWith("/blog/post/article-56"))?.lastModified).toBe(articles[55].published_at);
-    expect(result.find((entry) => entry.url.endsWith("/notes/page/3"))?.lastModified).toBe(notes[6].published_at);
+    expect(result.find((entry) => entry.url.endsWith("/notes/page/3"))?.lastModified).toBe(notes[40].published_at);
     expect(result.find((entry) => entry.url.endsWith("/projects/demo"))).not.toHaveProperty("lastModified");
     expect(result.find((entry) => entry.url.endsWith("/privacy"))).not.toHaveProperty("lastModified");
     expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/articles?page=2&page_size=50"))).toBe(true);

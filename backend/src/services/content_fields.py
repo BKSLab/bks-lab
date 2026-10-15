@@ -6,10 +6,17 @@ normalize their input into ContentFields and derive the same column set.
 """
 
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, datetime
 from typing import Any
 
 from src.utils import markdown as md
+
+SNAPSHOT_FIELDS = (
+    "title", "excerpt", "category", "published_at", "cover_image", "tags",
+    "seo_title", "seo_description", "og_image", "related_slug", "featured", "sort_order",
+    "content_markdown", "status", "reading_time", "word_count", "content_text", "content_html",
+    "published_at_time", "source_name", "source_url",
+)
 
 
 @dataclass(frozen=True)
@@ -93,7 +100,14 @@ def build_snapshot(values: dict[str, Any]) -> dict[str, Any]:
     snapshot = {key: value for key, value in values.items() if key not in {"type", "slug"}}
     if snapshot["published_at"] is not None:
         snapshot["published_at"] = snapshot["published_at"].isoformat()
+    if isinstance(snapshot.get("published_at_time"), datetime):
+        snapshot["published_at_time"] = snapshot["published_at_time"].isoformat()
     return snapshot
+
+
+def snapshot_of_item(item: Any) -> dict[str, Any]:
+    """Snapshot current editable/derived fields plus server-owned provenance."""
+    return build_snapshot({key: getattr(item, key) for key in SNAPSHOT_FIELDS})
 
 
 def snapshot_to_values(snapshot: dict[str, Any]) -> dict[str, Any]:
@@ -101,4 +115,6 @@ def snapshot_to_values(snapshot: dict[str, Any]) -> dict[str, Any]:
     values = dict(snapshot)
     if values.get("published_at"):
         values["published_at"] = date.fromisoformat(values["published_at"])
+    if values.get("published_at_time"):
+        values["published_at_time"] = datetime.fromisoformat(values["published_at_time"])
     return values

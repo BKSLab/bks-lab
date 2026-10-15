@@ -7,6 +7,8 @@ transaction: the repositories only flush here, the service commits.
 """
 
 import logging
+from collections.abc import Callable
+from datetime import datetime
 from typing import Any
 
 from pydantic import BaseModel, ValidationError
@@ -16,6 +18,7 @@ from src.db.models import ContentItem
 from src.exceptions.admin import AdminContentNotFoundError, AdMarkerError, ContentValidationError
 from src.repositories.content_items import ContentItemRepository
 from src.repositories.content_revisions import ContentRevisionRepository
+from src.repositories.news_notes import NewsNoteRepository
 from src.schemas.admin import (
     ArticleCreate,
     ContentCreate,
@@ -29,9 +32,9 @@ from src.schemas.admin import (
 from src.services.content_fields import (
     ContentFields,
     build_item_values,
-    build_snapshot,
     resolve_status,
     snapshot_to_values,
+    snapshot_of_item,
 )
 from src.utils import markdown as md
 
@@ -84,11 +87,15 @@ class ContentAdminService:
         revisions: ContentRevisionRepository,
         revalidator: RevalidationClient,
         words_per_minute: int,
+        utc_now: Callable[[], datetime],
+        note_queue: NewsNoteRepository,
     ) -> None:
         self.items = items
         self.revisions = revisions
         self.revalidator = revalidator
         self.words_per_minute = words_per_minute
+        self.utc_now = utc_now
+        self.note_queue = note_queue
 
     # Public use-cases
 
@@ -102,9 +109,11 @@ class ContentAdminService:
         self._check_ad_markers(data.type, data.content_markdown)
         fields = _fields_from_payload(data)
         values = build_item_values(data.type, data.slug, fields, self.words_per_minute)
+        if data.type == "note" and values["status"] == "active":
+            values["published_at_time"] = self.utc_now()
         item = await self.items.add(values)
         await self.revisions.add(
-            item_id=item.id, snapshot=build_snapshot(values), word_count=values["word_count"]
+            item_id=item.id, snapshot=self._snapshot_of(item), word_count=values["word_count"]
         )
         await self.items.commit()
         await self.revalidator.revalidate_content()
@@ -123,9 +132,10 @@ class ContentAdminService:
         self._check_ad_markers(item.type, validated.content_markdown)
         fields = _fields_from_payload(validated)
         values = build_item_values(item.type, item.slug, fields, self.words_per_minute)
+        self._first_publication(item, values)
         await self.items.apply(item, values)
         await self.revisions.add(
-            item_id=item.id, snapshot=build_snapshot(values), word_count=values["word_count"]
+            item_id=item.id, snapshot=self._snapshot_of(item), word_count=values["word_count"]
         )
         await self.items.commit()
         await self.revalidator.revalidate_content()
@@ -154,7 +164,9 @@ class ContentAdminService:
         item = await self._get_or_raise(item_id)
         if status == "archived" and item.type != "project":
             raise ContentValidationError
-        await self.items.apply(item, {"status": status})
+        values = {"status": status}
+        self._first_publication(item, values)
+        await self.items.apply(item, values)
         snapshot = self._snapshot_of(item)
         snapshot["status"] = status
         await self.revisions.add(
@@ -171,7 +183,7 @@ class ContentAdminService:
         Raises:
             AdminContentNotFoundError: When the material does not exist.
         """
-        await self._get_or_raise(item_id)
+        await self._get_or_raise(item_id, for_update=False)
         rows = await self.revisions.list_for_item(item_id)
         return [ContentRevisionRow.model_validate(row) for row in rows]
 
@@ -181,7 +193,7 @@ class ContentAdminService:
         Raises:
             AdminContentNotFoundError: When the material or version is missing.
         """
-        await self._get_or_raise(item_id)
+        await self._get_or_raise(item_id, for_update=False)
         revision = await self.revisions.get(item_id, revision_no)
         if revision is None:
             raise AdminContentNotFoundError
@@ -208,9 +220,14 @@ class ContentAdminService:
         if revision is None:
             raise AdminContentNotFoundError
         values = snapshot_to_values(revision.snapshot)
+        # Actual first publication and provenance cannot be rewritten by restoring
+        # a draft version or an older snapshot which predates these fields.
+        for key in ("published_at_time", "source_name", "source_url"):
+            values.pop(key, None)
+        self._first_publication(item, values)
         await self.items.apply(item, values)
         await self.revisions.add(
-            item_id=item.id, snapshot=dict(revision.snapshot), word_count=revision.word_count
+            item_id=item.id, snapshot=self._snapshot_of(item), word_count=revision.word_count
         )
         await self.items.commit()
         await self.revalidator.revalidate_content()
@@ -225,8 +242,10 @@ class ContentAdminService:
         if md.ad_marker_error(content_type, content_markdown) is not None:
             raise AdMarkerError
 
-    async def _get_or_raise(self, item_id: int) -> ContentItem:
-        item = await self.items.get_by_id(item_id)
+    async def _get_or_raise(self, item_id: int, *, for_update: bool = True) -> ContentItem:
+        if for_update:
+            await self.note_queue.lock_for_content(item_id)
+        item = await self.items.get_by_id(item_id, for_update=for_update)
         if item is None:
             raise AdminContentNotFoundError
         return item
@@ -234,9 +253,14 @@ class ContentAdminService:
     @staticmethod
     def _snapshot_of(item: ContentItem) -> dict[str, Any]:
         """Snapshot the current row state (used by status transitions)."""
-        return build_snapshot(
-            {key: getattr(item, key) for key in (*_MERGE_FIELDS, "status", "reading_time", "word_count", "content_text", "content_html")}
-        )
+        return snapshot_of_item(item)
+
+    def _first_publication(self, item: ContentItem, values: dict[str, Any]) -> None:
+        """Preserve legacy ordering and stamp the first new manual publication."""
+        if item.type != "note" or item.published_at_time is not None:
+            return
+        if item.status == "draft" and values.get("status") == "active":
+            values["published_at_time"] = self.utc_now()
 
     @staticmethod
     def _validate_merged(item: ContentItem, updates: dict[str, Any]) -> BaseModel:

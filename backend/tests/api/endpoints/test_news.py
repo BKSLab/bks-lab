@@ -40,6 +40,10 @@ ROUTES = [
     ("GET", "/runs"),
     ("GET", "/settings"),
     ("PATCH", "/settings"),
+    ("GET", "/note-settings"),
+    ("PATCH", "/note-settings"),
+    ("GET", "/note-queue"),
+    ("PATCH", "/note-queue/example-note"),
 ]
 
 

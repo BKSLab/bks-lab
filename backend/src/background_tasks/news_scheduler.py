@@ -69,6 +69,7 @@ class NewsScheduler:
             if policy["enabled"]:
                 await self._pipeline.enqueue_scheduled()
                 await self._pipeline.enqueue_pending(policy)
+            await self._pipeline.publish_note()
             await asyncio.to_thread(self._config.health_file.touch)
 
     async def maintenance(self) -> None:
@@ -122,6 +123,11 @@ async def run_scheduler() -> None:
     from src.repositories.news_runs import NewsRunRepository
     from src.repositories.news_settings import NewsSettingsRepository
     from src.repositories.news_sources import NewsSourceRepository
+    from src.repositories.content_items import ContentItemRepository
+    from src.repositories.content_revisions import ContentRevisionRepository
+    from src.repositories.news_notes import NewsNoteRepository
+    from src.services.news_notes import NewsNoteService
+    from src.clients.revalidation import RevalidationClient
 
     settings = get_settings()
     config = settings.news
@@ -138,6 +144,12 @@ async def run_scheduler() -> None:
                 items=NewsItemRepository(session), analyses=NewsAnalysisRepository(session),
                 catalog=NewsCatalogRepository(session), settings=NewsSettingsRepository(session),
                 runs=NewsRunRepository(session),
+                notes=NewsNoteService(
+                    repository=NewsNoteRepository(session), items=ContentItemRepository(session),
+                    revisions=ContentRevisionRepository(session), revalidator=RevalidationClient(settings.revalidate),
+                    words_per_minute=settings.content.words_per_minute,
+                    utc_now=lambda: datetime.now(timezone.utc),
+                ),
             )
 
     stop_event = asyncio.Event()

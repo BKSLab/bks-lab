@@ -1,11 +1,16 @@
 """Note use-cases: feed with pagination and latest notes."""
 
 import logging
+import base64
+import binascii
+import json
+from datetime import datetime, time, timezone
 
 from src.db.models import ContentItem
 from src.repositories.content_items import ContentItemRepository
-from src.schemas.notes import Note, RelatedArticle
+from src.schemas.notes import Note, NoteFeed, RelatedArticle
 from src.schemas.pagination import Paged
+from src.exceptions.news import NewsValidationError
 
 logger = logging.getLogger(__name__)
 
@@ -34,11 +39,51 @@ class NoteService:
         items = await self._published_items()
         return [await self._build_note(item) for item in items[:limit]]
 
+    async def get_feed(self, *, limit: int, before: str | None, after: str | None) -> NoteFeed:
+        """Return one stable keyset page, or check notes newer than a known cursor."""
+        if before is not None and after is not None:
+            raise NewsValidationError
+        rows = await self.notes_repository.note_feed(
+            limit=limit, before=self._decode_cursor(before) if before is not None else None,
+            after=self._decode_cursor(after) if after is not None else None,
+        )
+        has_more = len(rows) > limit
+        items = rows[:limit]
+        return NoteFeed(
+            items=[await self._build_note(item) for item in items], has_more=has_more,
+            next_cursor=self._cursor(items[-1]) if has_more and items else None,
+            newest_cursor=self._cursor(items[0]) if items else None,
+        )
+
+    @staticmethod
+    def _publication_time(item: ContentItem) -> datetime:
+        return item.published_at_time or datetime.combine(item.published_at, time.min, timezone.utc)
+
+    @classmethod
+    def _cursor(cls, item: ContentItem) -> str:
+        value = json.dumps([1, cls._publication_time(item).isoformat(), item.id], separators=(",", ":"))
+        return base64.urlsafe_b64encode(value.encode()).decode().rstrip("=")
+
+    @staticmethod
+    def _decode_cursor(value: str) -> tuple[datetime, int]:
+        try:
+            if not 1 <= len(value) <= 250:
+                raise ValueError("Invalid cursor length")
+            decoded = json.loads(base64.b64decode(value + "=" * (-len(value) % 4), altchars=b"-_", validate=True))
+            if not isinstance(decoded, list) or len(decoded) != 3 or type(decoded[0]) is not int or decoded[0] != 1:
+                raise ValueError("Invalid cursor version")
+            instant = datetime.fromisoformat(decoded[1])
+            if instant.tzinfo is None or type(decoded[2]) is not int or not 1 <= decoded[2] <= 2_147_483_647:
+                raise ValueError("Invalid cursor identity")
+            return instant.astimezone(timezone.utc), decoded[2]
+        except (ValueError, TypeError, IndexError, OverflowError, binascii.Error, UnicodeError) as error:
+            raise NewsValidationError from error
+
     async def _published_items(self) -> list[ContentItem]:
-        items = await self.notes_repository.list_by_type("note", statuses=("active", "archived"))
+        items = await self.notes_repository.list_by_type("note", statuses=("active",))
         return sorted(
             items,
-            key=lambda item: (-item.published_at.toordinal(), item.slug),
+            key=lambda item: (self._publication_time(item), item.id or 0), reverse=True,
         )
 
     async def _build_note(self, item: ContentItem) -> Note:
@@ -47,6 +92,9 @@ class NoteService:
             title=item.title,
             excerpt=item.excerpt or "",
             published_at=item.published_at,
+            published_at_time=item.published_at_time,
+            source_name=item.source_name,
+            source_url=item.source_url,
             reading_time=item.reading_time or 1,
             tags=list(item.tags),
             related_article=await self._resolve_related(item),

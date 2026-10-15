@@ -323,10 +323,94 @@
   .note-entry {
     scroll-margin-top: 2rem;
     border-top: 1px solid var(--color-border);
-    padding-block: 2rem;
+    padding-block: 1.25rem;
+    min-width: 0;
+    font-size: 1rem;
+    line-height: 1.65;
   }
   .note-entry:target {
     border-top-color: var(--color-accent);
+  }
+  .note-entry:focus {
+    outline: 3px solid var(--color-accent);
+    outline-offset: -3px;
+  }
+  .note-title {
+    margin-bottom: 0.5rem;
+    font-size: 1.25rem;
+    font-weight: 600;
+    line-height: 1.4;
+  }
+  .note-entry-compact .note-title {
+    font-size: 1.125rem;
+  }
+  .note-title-link {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+  }
+  .note-title-link:hover {
+    color: var(--color-accent);
+    text-decoration: underline;
+  }
+  .note-summary,
+  .note-related {
+    overflow-wrap: anywhere;
+  }
+  .note-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem 0.75rem;
+    margin-top: 0.5rem;
+    color: var(--color-text-muted);
+    font-size: 0.875rem;
+    line-height: 1.6;
+  }
+  .note-details,
+  .note-related a {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+    color: var(--color-accent);
+    text-decoration: underline;
+    text-underline-offset: 0.2em;
+  }
+  .note-entry .prose-content {
+    font-size: inherit;
+    line-height: inherit;
+  }
+  .note-entry .prose-content > * + * {
+    margin-top: 0.75em;
+  }
+  .notes-feed-scroll {
+    max-height: min(50rem, 80vh);
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding-inline: 0.25rem 0.75rem;
+    scrollbar-gutter: stable;
+  }
+  .notes-feed-notice {
+    padding-block: 0 1rem;
+  }
+  .notes-feed-controls {
+    padding-block: 0.5rem 1.25rem;
+  }
+  .notes-feed-empty {
+    padding-block: 1rem;
+    color: var(--color-text-muted);
+  }
+  .notes-feed-error {
+    margin-top: 0.75rem;
+    color: var(--color-error);
+    font-size: 1rem;
+  }
+  @media (forced-colors: active) {
+    .notes-feed-scroll {
+      border: 1px solid CanvasText;
+    }
+    .note-entry:focus {
+      outline-color: Highlight;
+    }
   }
   .prose-content {
     max-width: 72ch;

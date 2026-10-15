@@ -2,7 +2,9 @@
 
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+
+from src.schemas.news_notes import NoteCandidate
 
 Score = Annotated[int, Field(strict=True, ge=0, le=100)]
 NewsFormat = Literal["short_news_candidate", "longread_candidate"]
@@ -30,3 +32,15 @@ class NewsAnalysisResult(BaseModel):
     recommended_formats: list[NewsFormat] = Field(max_length=2)
     confidence: float = Field(ge=0, le=1)
     needs_verification: bool = Field(strict=True)
+    note_candidate: NoteCandidate | None = Field(None, description="Optional short Russian note, without a source link.")
+
+    @field_validator("note_candidate", mode="before")
+    @classmethod
+    def optional_valid_candidate(cls, value):
+        """Keep valid classification when the optional generated note is invalid."""
+        if value is None:
+            return None
+        try:
+            return NoteCandidate.model_validate(value)
+        except (ValidationError, TypeError, ValueError):
+            return None

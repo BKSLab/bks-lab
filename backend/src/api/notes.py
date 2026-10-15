@@ -6,7 +6,7 @@ from typing import Annotated
 from fastapi import APIRouter, Query, Response
 
 from src.dependencies.services import NoteServiceDep
-from src.schemas.notes import Note
+from src.schemas.notes import Note, NoteFeed
 from src.schemas.pagination import Paged
 
 logger = logging.getLogger(__name__)
@@ -18,8 +18,8 @@ router = APIRouter(tags=["notes"])
     path="/notes",
     summary="Notes feed",
     description=(
-        "Paginated feed of published notes sorted by published_at desc, "
-        "slug asc. Notes have no dedicated pages; the feed is anchored "
+        "Paginated archive of published notes sorted by actual publication time "
+        "and ID descending. Notes have no dedicated pages; the feed is anchored "
         "with #note-<slug>."
     ),
     operation_id="listNotes",
@@ -51,6 +51,26 @@ async def list_notes(
     logger.info("GET /notes page=%s page_size=%s", page, page_size)
     result = await service.list_notes(page=page, page_size=page_size)
     response.headers["Cache-Control"] = "public, max-age=60"
+    return result
+
+
+@router.get(
+    path="/notes/feed", summary="Cursor notes feed",
+    description="Published notes ordered by actual publication instant and ID descending; before and after are mutually exclusive.",
+    operation_id="notesFeed", response_model=NoteFeed, response_description="Stable note page with cursors.",
+    responses={200: {"description": "Published notes."}, 422: {"description": "Invalid cursor or limit."}, 500: {"description": "Content storage error."}},
+)
+async def notes_feed(
+    response: Response, service: NoteServiceDep,
+    limit: Annotated[int, Query(ge=1, le=50, description="Maximum returned notes.")] = 20,
+    before: Annotated[str | None, Query(max_length=250, description="Fetch notes older than this opaque cursor.")] = None,
+    after: Annotated[str | None, Query(max_length=250, description="Check notes newer than this opaque cursor, newest first.")] = None,
+) -> NoteFeed:
+    """Read the live note feed without intermediary or browser caching."""
+    logger.info("Starting notes feed operation")
+    result = await service.get_feed(limit=limit, before=before, after=after)
+    response.headers["Cache-Control"] = "no-store"
+    logger.info("Completed notes feed operation")
     return result
 
 

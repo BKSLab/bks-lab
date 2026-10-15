@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 
 export const ARTICLE_PAGE_SIZE = 3;
-export const NOTE_PAGE_SIZE = 3;
+export const NOTE_PAGE_SIZE = 20;
 export const CATEGORY_TITLES: Record<string, string> = {
   development: "Разработка",
   ai: "AI",

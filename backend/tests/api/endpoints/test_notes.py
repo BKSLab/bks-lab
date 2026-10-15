@@ -15,6 +15,7 @@ async def test_list_notes_returns_paged_contract(client: AsyncClient) -> None:
     assert set(first) == {
         "slug", "title", "excerpt", "published_at", "reading_time",
         "tags", "related_article", "content_html",
+        "published_at_time", "source_name", "source_url",
     }
     assert first["excerpt"] == "Short note text."
 
@@ -49,5 +50,5 @@ async def test_latest_notes(client: AsyncClient) -> None:
 
     assert response.status_code == 200
     body = response.json()
-    assert [item["slug"] for item in body] == ["note-two", "note-broken-link"]
+    assert [item["slug"] for item in body] == ["note-two", "note-one"]
     assert (await client.get("/api/v1/notes/latest", params={"limit": 0})).status_code == 422

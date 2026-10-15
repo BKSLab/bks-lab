@@ -35,6 +35,12 @@ from src.repositories.news_sources import NewsSourceRepository
 from src.schemas.news_collection import CollectedItem, CollectionResult, DiscoveryResult
 from src.services.news_analysis import NewsAnalysisService
 from src.services.news_pipeline import NewsPipeline, NewsRepositories
+from src.repositories.news_notes import NewsNoteRepository
+from src.repositories.content_items import ContentItemRepository
+from src.repositories.content_revisions import ContentRevisionRepository
+from src.services.news_notes import NewsNoteService
+from src.clients.revalidation import RevalidationClient
+from src.core.settings import RevalidateSettings
 from tests.news_helpers import analysis_data, collected
 
 
@@ -52,6 +58,11 @@ def worker_scope(session_factory):
                     items=NewsItemRepository(session), analyses=NewsAnalysisRepository(session),
                     catalog=NewsCatalogRepository(session), settings=NewsSettingsRepository(session),
                     runs=NewsRunRepository(session),
+                    notes=NewsNoteService(
+                        repository=NewsNoteRepository(session), items=ContentItemRepository(session),
+                        revisions=ContentRevisionRepository(session), revalidator=RevalidationClient(RevalidateSettings()),
+                        words_per_minute=200, utc_now=lambda: datetime.now(timezone.utc),
+                    ),
                 )
         finally:
             active.reset(token)

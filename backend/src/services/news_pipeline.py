@@ -27,6 +27,7 @@ from src.repositories.news_sources import NewsSourceRepository
 from src.schemas.news import NewsSettingsData
 from src.schemas.news_collection import NEWS_MIN_CONTENT_CHARS, CollectedItem
 from src.services.news_analysis import NEWS_PROMPT_VERSION, NewsAnalysisService
+from src.services.news_notes import NewsNoteService
 
 logger = logging.getLogger(__name__)
 NEWS_COLLECTION_VERSION = "news-text-v3"
@@ -43,6 +44,7 @@ class NewsRepositories:
     catalog: NewsCatalogRepository
     settings: NewsSettingsRepository
     runs: NewsRunRepository
+    notes: NewsNoteService
 
 
 RepositoryScope = Callable[[], AbstractAsyncContextManager[NewsRepositories]]
@@ -99,6 +101,11 @@ class NewsPipeline:
         if recovered:
             logger.warning("Recovered %s expired news jobs", recovered)
         return recovered
+
+    async def publish_note(self) -> str | None:
+        """Run the independent paced publisher even when source collection is paused."""
+        async with self._repositories() as repositories:
+            return await repositories.notes.publish_due()
 
     async def enqueue_pending(self, policy: dict[str, Any]) -> int:
         """Resume a bounded pending backlog without reviving exhausted jobs."""
@@ -419,6 +426,7 @@ class NewsPipeline:
                 and item.analysis.model == self._config.llm_model
                 and item.analysis.prompt_version == NEWS_PROMPT_VERSION
             ):
+                await repositories.notes.enqueue_analysis(item.analysis.id, job_id=job.id, owner_token=owner)
                 return {"analysis_id": item.analysis.id}
             if max(len(item.content), len(item.excerpt)) < NEWS_MIN_CONTENT_CHARS:
                 raise NewsSourceError(
@@ -449,6 +457,8 @@ class NewsPipeline:
                 data=result, job_id=job.id, owner_token=owner,
                 replace_existing=bool(job.payload.get("force")),
             )
+            if saved is not None:
+                await repositories.notes.enqueue_analysis(saved.id, job_id=job.id, owner_token=owner)
         return {"analysis_id": saved.id} if saved is not None else {"skipped": "content_changed"}
 
     def _analysis_key(self, item_id: int, content_hash: str) -> str:

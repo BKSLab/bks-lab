@@ -80,6 +80,7 @@ class NewsAnalysisRepository(NewsRepository):
                         "needs_verification",
                         "news_score",
                         "article_score",
+                        "note_candidate",
                     }
                 }
                 topics = list(

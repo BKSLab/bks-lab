@@ -10,6 +10,8 @@ from pydantic import AwareDatetime
 
 from src.dependencies.admin import AdminDep, check_admin_origin, require_admin
 from src.dependencies.news import NewsAdminServiceDep
+from src.dependencies.news_notes import NewsNoteServiceDep
+from src.schemas.news_notes import NoteSettingsPatch, NoteSettingsRow, NoteQueuePatch, NoteQueueRow, QueueStatus
 from src.schemas.news import (
     CatalogCreate,
     CatalogPatch,
@@ -84,6 +86,50 @@ PageSize = Annotated[int, Query(ge=1, le=50, description="Maximum rows per page.
 FilterID = Annotated[
     int | None, Query(ge=1, description="Existing taxonomy ID.")
 ]
+
+
+@router.get(
+    "/note-settings", response_model=NoteSettingsRow, summary="Read automatic note settings",
+    description="Read publication settings, activation boundary and queue counts.",
+    operation_id="newsNoteSettings", response_description="Automatic note configuration and counts.",
+)
+async def note_settings(service: NewsNoteServiceDep) -> NoteSettingsRow:
+    """Read automatic publication state without calling external services."""
+    return await service.get_settings()
+
+
+@router.patch(
+    "/note-settings", response_model=NoteSettingsRow, summary="Edit automatic note settings",
+    description="Pause/resume publication or set its interval and maximum age; the first enablement establishes the permanent admission boundary.",
+    operation_id="newsUpdateNoteSettings", response_description="Updated automatic note settings.",
+)
+async def update_note_settings(data: NoteSettingsPatch, service: NewsNoteServiceDep) -> NoteSettingsRow:
+    """Set publication policy without retroactive admission of existing material."""
+    return await service.update_settings(data)
+
+
+@router.get(
+    "/note-queue", response_model=Paged[NoteQueueRow], summary="Read automatic note queue",
+    description="Read draft/publication dispositions with exact source snapshots and content editor IDs.",
+    operation_id="newsNoteQueue", response_description="One disposition page.",
+)
+async def note_queue(
+    service: NewsNoteServiceDep,
+    status: Annotated[QueueStatus, Query(description="Queue disposition.")] = "queued",
+    page: Page = 1, page_size: PageSize = 20,
+) -> Paged[NoteQueueRow]:
+    """Read queue text from live content without overwriting editor changes."""
+    return await service.list_queue(status=status, page=page, page_size=page_size)
+
+
+@router.patch(
+    "/note-queue/{note_slug}", response_model=NoteQueueRow, summary="Edit an automatic note draft",
+    description="Edit a bounded draft title/text, exclude it or return an excluded draft to the queue. Published notes use the content editor.",
+    operation_id="newsUpdateNoteQueue", response_description="Updated queue row.",
+)
+async def update_note_queue(note_slug: Slug, data: NoteQueuePatch, service: NewsNoteServiceDep) -> NoteQueueRow:
+    """Save draft changes with a revision or change the queue disposition."""
+    return await service.update_queue(note_slug, data)
 
 
 @router.get(

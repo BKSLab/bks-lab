@@ -95,6 +95,9 @@ class NewsAnalysis(Base):
         doc="Requires fact verification.",
         comment="Requires fact verification.",
     )
+    note_candidate: Mapped[dict | None] = mapped_column(
+        JSONB, nullable=True, doc="Validated optional Russian note candidate.", comment="Validated optional Russian note candidate.",
+    )
     news_score: Mapped[float] = mapped_column(
         Float,
         index=True,

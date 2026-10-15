@@ -32,10 +32,20 @@ export interface Note {
   title: string;
   excerpt: string;
   published_at: string;
+  published_at_time?: string | null;
+  source_name?: string | null;
+  source_url?: string | null;
   reading_time: number;
   tags: string[];
   related_article: NoteRelatedArticle | null;
   content_html: string;
+}
+
+export interface NotesFeedPage {
+  items: Note[];
+  next_cursor: string | null;
+  newest_cursor: string | null;
+  has_more: boolean;
 }
 
 export type ProjectStatus = "active" | "archived";

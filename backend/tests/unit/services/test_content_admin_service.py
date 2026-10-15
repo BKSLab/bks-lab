@@ -11,6 +11,7 @@ from src.exceptions.admin import AdminContentNotFoundError, ContentValidationErr
 from src.exceptions.repositories import ContentItemConflictError, ContentRevisionRepositoryError
 from src.repositories.content_items import ContentItemRepository
 from src.repositories.content_revisions import ContentRevisionRepository
+from src.repositories.news_notes import NewsNoteRepository
 from src.schemas.admin import ArticleCreate, ContentPatch
 from src.services.content_admin import ContentAdminService
 from src.services.content_fields import build_item_values, build_snapshot, ContentFields
@@ -41,7 +42,8 @@ def make_service(item: ContentItem | None = None):
     revisions = AsyncMock(spec=ContentRevisionRepository)
     revalidator = AsyncMock(spec=RevalidationClient)
     service = ContentAdminService(
-        items=items, revisions=revisions, revalidator=revalidator, words_per_minute=200
+        items=items, revisions=revisions, revalidator=revalidator, words_per_minute=200,
+        utc_now=lambda: NOW, note_queue=AsyncMock(spec=NewsNoteRepository),
     )
     return service, items, revisions, revalidator
 
@@ -183,7 +185,7 @@ async def test_restore_revision_rewrites_row_and_appends_new_revision() -> None:
     assert result.title == "Old title"
     assert result.content_markdown == "Old body."
     new_revision = revisions.add.call_args.kwargs
-    assert new_revision["snapshot"] == snapshot
+    assert new_revision["snapshot"] == {**snapshot, "published_at_time": None, "source_name": None, "source_url": None}
     items.commit.assert_called_once()
 
 

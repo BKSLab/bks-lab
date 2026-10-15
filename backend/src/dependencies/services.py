@@ -12,6 +12,7 @@ from src.dependencies.repositories import (
     AdminSessionRepositoryDep,
     ContentItemRepositoryDep,
     ContentRevisionRepositoryDep,
+    NewsNoteRepositoryDep,
     FeedbackRepositoryDep,
     MediaFileRepositoryDep,
     StatsRepositoryDep,
@@ -120,6 +121,8 @@ def get_content_admin_service(
     items: ContentItemRepositoryDep,
     revisions: ContentRevisionRepositoryDep,
     revalidator: RevalidationClientDep,
+    utc_now: UtcNowDep,
+    note_queue: NewsNoteRepositoryDep,
 ) -> ContentAdminService:
     """Build the content editor write path."""
     return ContentAdminService(
@@ -127,6 +130,8 @@ def get_content_admin_service(
         revisions=revisions,
         revalidator=revalidator,
         words_per_minute=get_settings().content.words_per_minute,
+        utc_now=utc_now,
+        note_queue=note_queue,
     )
 
 

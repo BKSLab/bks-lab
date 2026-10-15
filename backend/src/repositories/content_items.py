@@ -3,9 +3,10 @@
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import datetime
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import DateTime, cast, func, select, tuple_
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -138,14 +139,42 @@ class ContentItemRepository:
         await self.remove(item)
         await self.commit()
 
-    async def get_by_id(self, item_id: int) -> ContentItem | None:
+    async def get_by_id(self, item_id: int, *, for_update: bool = False) -> ContentItem | None:
         """Return one material by its stable database identifier.
 
         Raises:
             ContentItemRepositoryError: On any database error.
         """
         async with self._operation():
+            if for_update:
+                return await self.db_session.scalar(
+                    select(ContentItem).where(ContentItem.id == item_id)
+                    .with_for_update().execution_options(populate_existing=True)
+                )
             return await self.db_session.get(ContentItem, item_id)
+
+    async def note_feed(
+        self, *, limit: int, before: tuple[datetime, int] | None,
+        after: tuple[datetime, int] | None,
+    ) -> list[ContentItem]:
+        """Read a stable keyset using the publication instant and unique content ID.
+
+        Historical notes without an actual instant use their recorded date at
+        midnight UTC, preserving their existing dates without a data migration.
+        """
+        published = func.coalesce(
+            ContentItem.published_at_time,
+            cast(ContentItem.published_at, DateTime()).op("AT TIME ZONE")("UTC"),
+        )
+        statement = select(ContentItem).where(ContentItem.type == "note", ContentItem.status == "active")
+        if before is not None:
+            statement = statement.where(tuple_(published, ContentItem.id) < before)
+        if after is not None:
+            statement = statement.where(tuple_(published, ContentItem.id) > after)
+        async with self._operation():
+            return list(await self.db_session.scalars(
+                statement.order_by(published.desc(), ContentItem.id.desc()).limit(limit + 1)
+            ))
 
     async def get_by_slug(self, content_type: str, slug: str) -> ContentItem | None:
         """Return one material by type and slug, or None when missing.

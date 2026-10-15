@@ -9,7 +9,9 @@
 `docs/api_contract.md` → Admin API → Контент). Бэкенд отдаёт контент через
 API (`docs/api_contract.md`).
 
-Все новые публикации создаются только через редактор `/admin/content`.
+Авторские материалы создаются через редактор `/admin/content`. Короткие
+автоматические заметки также сохраняются в `content_items`: сначала
+черновиком, затем публикуются отдельной очередью редакционного центра.
 Production запускается с пустой БД: локальная БД и uploads не переносятся,
 Markdown-файлы при развёртывании не импортируются.
 
@@ -22,10 +24,10 @@ Markdown (GFM). Ниже описан формат полей; в Markdown-фа�
 
 `content_items` (основные поля): `id`, `type` (`article|note|project`),
 `slug` (уникален внутри типа, неизменен), `title`, `category`, `tags`
-(JSONB), `published_at`, `reading_time`, `status`
+(JSONB), `published_at`, `published_at_time` (точное время публикации заметки), `reading_time`, `status`
 (`active|draft|archived`), `word_count`, `content_text` (plain text),
 `excerpt`, `cover_image`, `seo_title`, `seo_description`, `og_image`,
-`related_slug`, `featured`, `sort_order`, `content_markdown`,
+`related_slug`, `source_name`, `source_url` (происхождение автозаметки), `featured`, `sort_order`, `content_markdown`,
 `content_html`, `created_at`, `updated_at`.
 
 Slug: строчные латинские буквы и цифры, разделённые одиночными дефисами;
@@ -68,6 +70,16 @@ Slug: строчные латинские буквы и цифры, раздел
   публикацию (логируется, `related_article` в API = null).
 - Обложки и категории нет. `excerpt` = первый абзац (вычисляется при
   сохранении), `reading_time` = из `word_count` (минимум 1).
+- Автозаметка: заголовок до 90 символов, текст до 300 символов с пробелами;
+  ссылка и название первоисточника хранятся отдельно от текста. Они
+  формируют подпись «Подробнее…» в публичной ленте.
+- `published_at_time` хранит точное время фактической публикации (UTC),
+  используется для порядка и курсорной подгрузки ленты. Обычная дата
+  `published_at` сохраняется. В публичном интерфейсе нет времени чтения
+  и тегов, ручной Markdown-текст и связанная статья поддерживаются.
+- Состояния очереди автопубликации отделены от статуса контента:
+  `queued`, `published`, `excluded`, `expired`. Обычный ручной черновик
+  без записи в очереди не может быть опубликован её воркером.
 
 ## Проект (`type=project`)
 

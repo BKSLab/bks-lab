@@ -31,6 +31,7 @@ from src.core.limiter import limiter
 from src.db.models import (
     AdminSession, Base, ContentItem, ContentRevision, FeedbackMessage, MediaFile, PageView, Subscriber,
     NewsSource, NewsSourceCatalogueEntry, NewsJob, NewsCategory, NewsTopic, NewsSetting,
+    NewsNoteQueue, NewsNoteSetting,
 )
 from src.dependencies.db_session import get_db_session
 from src.dependencies.services import get_stats_service, get_utc_now
@@ -90,6 +91,8 @@ async def _clean_tables(
     """Keep DB tests isolated even when code under test opens own sessions."""
     yield
     async with session_factory() as session:
+        await session.execute(delete(NewsNoteQueue))
+        await session.execute(delete(NewsNoteSetting))
         await session.execute(delete(NewsSource))
         await session.execute(delete(NewsSourceCatalogueEntry))
         await session.execute(delete(NewsJob))

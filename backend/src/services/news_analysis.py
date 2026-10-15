@@ -10,7 +10,7 @@ from pydantic import field_validator
 from src.clients.llm import LlmClient
 from src.schemas.news_analysis import NewsAnalysisResult
 
-NEWS_PROMPT_VERSION = "news-v3"
+NEWS_PROMPT_VERSION = "news-v4-notes"
 NEWS_ANALYSIS_PROMPT = """You are the editorial classifier for BKS Lab, a personal Russian-language
 site about software engineering, architecture, IT management, practical AI,
 accessibility, and the social implications of AI. Assess material for an original
@@ -40,6 +40,14 @@ every detail. Keep editorial_comment_ru to 1–2 sentences, at most 600 characte
 explaining relevance and any verification needed without repeating the summary.
 Scores are integers 0–100, confidence is 0–1. Format lists may be empty for
 irrelevant material.
+When the material is relevant, sufficiently complete and does not need verification,
+also return note_candidate: {"title": "...", "text": "..."}, independently of its
+recommended_formats (a longread candidate may also provide a short note).
+Both fields must be in Russian and plain text without markup or URLs. The title
+must be at most 90 characters and the body at most 300 characters INCLUDING SPACES.
+Do not copy promotional claims as established facts. Attribute claims to their
+source when necessary. Do not put a source name, source link or publication date
+in separate fields: the server provides provenance. Otherwise note_candidate=null.
 """
 
 

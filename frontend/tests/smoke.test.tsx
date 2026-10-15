@@ -16,11 +16,13 @@ vi.mock("@/lib/api", () => ({
     },
   ]),
   getLatestArticles: vi.fn(async () => []),
-  getLatestNotes: vi.fn(async () => []),
+  getNotesFeed: vi.fn(async () => ({ items: [], next_cursor: null, newest_cursor: null, has_more: false })),
 }));
 
+vi.mock("next/navigation", () => ({ usePathname: () => "/" }));
+
 import HomePage from "@/app/(public)/page";
-import { getLatestNotes } from "@/lib/api";
+import { getNotesFeed } from "@/lib/api";
 
 describe("home page", () => {
   it("renders the API project, all sections and a single H1", async () => {
@@ -52,8 +54,8 @@ describe("home page", () => {
       .toBe("/notes");
   });
 
-  it("renders published notes as an accessible sidebar with links to the full notes", async () => {
-    vi.mocked(getLatestNotes).mockResolvedValueOnce([
+  it("renders complete notes in the accessible sidebar with local anchors", async () => {
+    vi.mocked(getNotesFeed).mockResolvedValueOnce({ items: [
       {
         slug: "small-steps",
         title: "Маленькие шаги",
@@ -64,12 +66,13 @@ describe("home page", () => {
         related_article: null,
         content_html: "<p>Полный текст заметки.</p>",
       },
-    ]);
+    ], next_cursor: null, newest_cursor: "head", has_more: false });
     const { container } = render(await HomePage());
     const notes = screen.getByRole("complementary", { name: "Заметки на полях" });
     expect(within(notes).getByRole("link", { name: "Маленькие шаги" }).getAttribute("href"))
-      .toBe("/notes#note-small-steps");
-    expect(within(notes).getByText("Рабочая идея начинается с небольшого изменения.")).toBeTruthy();
+      .toBe("#note-small-steps");
+    expect(within(notes).getByText("Полный текст заметки.")).toBeTruthy();
+    expect(within(notes).getByRole("region", { name: "Лента заметок" }).getAttribute("tabindex")).toBe("0");
     expect(within(notes).queryByText("Заметки скоро появятся.")).toBeNull();
     expect(await axe(container)).toHaveNoViolations();
   });

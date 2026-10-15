@@ -10,6 +10,7 @@ from fastapi import Depends
 from src.dependencies.db_session import DbSessionDep
 from src.repositories.content_items import ContentItemRepository
 from src.repositories.content_revisions import ContentRevisionRepository
+from src.repositories.news_notes import NewsNoteRepository
 from src.repositories.media_files import MediaFileRepository
 from src.repositories.admin_sessions import AdminSessionRepository
 from src.repositories.subscribers import SubscriberRepository
@@ -33,6 +34,14 @@ def get_content_revision_repository(session: DbSessionDep) -> ContentRevisionRep
 
 
 StatsRepositoryDep = Annotated[StatsRepository, Depends(get_stats_repository)]
+
+
+def get_news_note_repository(session: DbSessionDep) -> NewsNoteRepository:
+    """Per-request automatic-note queue repository."""
+    return NewsNoteRepository(session)
+
+
+NewsNoteRepositoryDep = Annotated[NewsNoteRepository, Depends(get_news_note_repository)]
 ContentItemRepositoryDep = Annotated[
     ContentItemRepository, Depends(get_content_item_repository)
 ]

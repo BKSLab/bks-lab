@@ -236,3 +236,31 @@ export interface NewsCollectionStatus {
   sources: NewsCollectionSourceStatus[];
   active_jobs: number;
 }
+
+export type NewsNoteStatus = "queued" | "published" | "excluded" | "expired";
+
+export interface NewsNoteSettings {
+  enabled: boolean;
+  interval_minutes: number;
+  max_age_hours: number;
+  started_at: string | null;
+  last_published_at: string | null;
+  next_publish_at: string | null;
+  queued: number;
+  published: number;
+  excluded: number;
+  expired: number;
+}
+
+export interface NewsNote {
+  note_slug: string;
+  content_id: number | null;
+  title: string;
+  text: string;
+  source_name: string;
+  source_url: string;
+  status: NewsNoteStatus;
+  created_at: string;
+  published_at_time: string | null;
+  reason: string | null;
+}
