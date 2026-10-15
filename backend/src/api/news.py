@@ -9,7 +9,7 @@ from fastapi.routing import APIRoute
 from pydantic import AwareDatetime
 
 from src.dependencies.admin import AdminDep, check_admin_origin, require_admin
-from src.dependencies.news import NewsAdminServiceDep, SourceCatalogueServiceDep
+from src.dependencies.news import NewsAdminServiceDep
 from src.schemas.news import (
     CatalogCreate,
     CatalogPatch,
@@ -17,7 +17,6 @@ from src.schemas.news import (
     CollectRequest,
     DecisionRequest,
     DecisionRow,
-    DiscoverRequest,
     ItemDetail,
     ItemRow,
     JobRow,
@@ -31,12 +30,10 @@ from src.schemas.news import (
     RunOutcome,
     SettingsPatch,
     SettingsRow,
-    SourceCreate,
     SourcePatch,
     SourceRow,
 )
 from src.schemas.pagination import Paged
-from src.schemas.news_source_catalogue import SourceCatalogueEntry
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +67,7 @@ router = APIRouter(
         403: {"description": "Unsafe requests require a trusted Origin."},
         404: {"description": "Requested news record does not exist."},
         409: {
-            "description": "Record conflict or matching successful discovery is required."
+            "description": "Concurrent record conflict."
         },
         422: {"description": "Invalid editorial configuration or request parameters."},
         500: {
@@ -94,52 +91,11 @@ FilterID = Annotated[
     summary="Read news sources",
     description="Read source settings and collection health.",
     operation_id="newsSources",
-    response_description="All configured sources.",
+    response_description="Verified source profiles with collection preferences.",
 )
 async def sources(service: NewsAdminServiceDep) -> list[SourceRow]:
     """Read sources without fetching their external URLs."""
     return await service.list_sources()
-
-
-@router.get(
-    "/sources/catalogue",
-    response_model=list[SourceCatalogueEntry],
-    summary="Read source catalogue suggestions",
-    description="Read persisted research suggestions without connecting sources or fetching URLs.",
-    operation_id="newsSourceCatalogue",
-    response_description="All source catalogue entries in research order.",
-)
-async def source_catalogue(service: SourceCatalogueServiceDep) -> list[SourceCatalogueEntry]:
-    """Read the startup-seeded source catalogue for the authenticated editor."""
-    return await service.list()
-
-
-@router.post(
-    "/sources/discover",
-    status_code=202,
-    response_model=QueuedJob,
-    summary="Preview a source",
-    description="Queue source detection and a safe preview of up to five materials.",
-    operation_id="newsDiscover",
-    response_description="Durable discovery job ID.",
-)
-async def discover(data: DiscoverRequest, service: NewsAdminServiceDep) -> QueuedJob:
-    """Queue a checked source preview and return immediately."""
-    return await service.discover(data)
-
-
-@router.post(
-    "/sources",
-    status_code=201,
-    response_model=SourceRow,
-    summary="Add a news source",
-    description="Save a source after matching successful discovery.",
-    operation_id="newsCreateSource",
-    response_description="Created source.",
-)
-async def create_source(data: SourceCreate, service: NewsAdminServiceDep) -> SourceRow:
-    """Persist a successfully checked source."""
-    return await service.create_source(data)
 
 
 @router.get(
@@ -159,14 +115,14 @@ async def source(source_slug: Slug, service: NewsAdminServiceDep) -> SourceRow:
     "/sources/{source_slug}",
     response_model=SourceRow,
     summary="Edit a news source",
-    description="Edit editorial fields or apply newly checked URL and selectors.",
+    description="Change only source enablement and its collection calendar in Europe/Samara.",
     operation_id="newsUpdateSource",
     response_description="Updated source.",
 )
 async def update_source(
     source_slug: Slug, data: SourcePatch, service: NewsAdminServiceDep
 ) -> SourceRow:
-    """Update a source with discovery enforced for adapter changes."""
+    """Update enablement or the source calendar without modifying its code-owned profile."""
     return await service.update_source(source_slug, data)
 
 

@@ -7,9 +7,6 @@ from src.core.news_settings import NewsSettings
 
 
 @pytest.mark.parametrize("changes", [
-    {"schedule": ("08:00", "08:00", "20:00")},
-    {"schedule": ("8:00", "14:00", "20:00")},
-    {"timezone": "Missing/TimeZone"},
     {"heartbeat_seconds": 60, "lease_seconds": 120},
     {"http_retries": 0},
     {"llm_retries": 0},

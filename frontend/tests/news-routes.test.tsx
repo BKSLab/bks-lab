@@ -17,15 +17,11 @@ import NewsItemsPage from "@/app/(admin)/admin/news/items/page";
 import NewsPlanPage from "@/app/(admin)/admin/news/plan/page";
 import NewsItemPage from "@/app/(admin)/admin/news/items/[id]/page";
 import NewsSourcesPage from "@/app/(admin)/admin/news/sources/page";
-import NewsCataloguePage from "@/app/(admin)/admin/news/sources/catalogue/page";
-import NewsNewSourcePage from "@/app/(admin)/admin/news/sources/new/page";
-import NewsSourcePage from "@/app/(admin)/admin/news/sources/[slug]/page";
 import NewsTopicsPage from "@/app/(admin)/admin/news/topics/page";
 import NewsSettingsPage from "@/app/(admin)/admin/news/settings/page";
 import NewsRunsPage from "@/app/(admin)/admin/news/runs/page";
 import NewsJobPage from "@/app/(admin)/admin/news/jobs/[slug]/page";
 import { adminFetch, requireAdmin } from "@/lib/admin-api";
-import { sourceCatalogue } from "./news-catalogue-fixtures";
 import { newsAnalysis, newsCategory, newsDecision, newsItem, newsJob, newsSettings, newsSource, newsTopic } from "./news-fixtures";
 
 const paged = { items: [], total: 0, page: 1, page_size: 20, pages: 0 };
@@ -36,7 +32,6 @@ beforeEach(() => {
   vi.mocked(requireAdmin).mockReset().mockResolvedValue({ username: "owner" });
   vi.mocked(adminFetch).mockImplementation(async path => {
     if (path === "/news/sources") return [newsSource];
-    if (path === "/news/sources/catalogue") return sourceCatalogue;
     if (path === "/news/topics") return [newsTopic];
     if (path === "/news/categories") return [newsCategory];
     if (path === "/news/items/4") return newsItem;
@@ -48,24 +43,12 @@ beforeEach(() => {
 });
 
 describe("protected editorial routes", () => {
-  it("loads catalogue suggestions from the protected API", async () => {
-    vi.mocked(adminFetch).mockImplementation(async path => path === "/news/sources/catalogue"
-      ? [{ ...sourceCatalogue[0], name: "Каталог из БД" }] : []);
-    render(<AdminLayout>{await NewsCataloguePage()}</AdminLayout>);
-    expect(screen.getByRole("heading", { name: /^Каталог из БД/ })).toBeTruthy();
-    expect(screen.getByRole("status").textContent).toContain("1 из 1");
-    expect(adminFetch).toHaveBeenCalledWith("/news/sources/catalogue");
-  });
-
   it.each([
     ["entry", () => NewsPage()],
     ["items", () => NewsItemsPage(emptyParams())],
     ["publication plan", () => NewsPlanPage(emptyParams())],
     ["item", () => NewsItemPage({ params: Promise.resolve({ id: "4" }) })],
     ["sources", () => NewsSourcesPage()],
-    ["source catalogue", () => NewsCataloguePage()],
-    ["new source", () => NewsNewSourcePage(emptyParams())],
-    ["source", () => NewsSourcePage({ params: Promise.resolve({ slug: newsSource.slug }) })],
     ["topics", () => NewsTopicsPage()],
     ["settings", () => NewsSettingsPage()],
     ["runs", () => NewsRunsPage(emptyParams())],
@@ -80,66 +63,47 @@ describe("protected editorial routes", () => {
     await expect(NewsPage()).rejects.toThrow("REDIRECT:/admin/news/items");
   });
 
-  it("links the complete catalogue from connected sources", async () => {
-    render(<AdminLayout>{await NewsSourcesPage()}</AdminLayout>);
-    expect(screen.getByRole("link", { name: "Каталог источников (98)" }).getAttribute("href")).toBe("/admin/news/sources/catalogue");
+  it("loads only prepared sources and keeps management on one accessible screen", async () => {
+    const { container } = render(<AdminLayout>{await NewsSourcesPage()}</AdminLayout>);
+    expect(adminFetch).toHaveBeenCalledExactlyOnceWith("/news/sources");
+    expect(screen.getByRole("heading", { name: newsSource.name })).toBeTruthy();
+    expect(screen.getByText(newsSource.description)).toBeTruthy();
+    expect(screen.getByRole("switch", { name: `Регулярная проверка: ${newsSource.name}` }).getAttribute("aria-checked")).toBe("false");
+    expect(screen.getByText("Ежедневно · 08:00, 20:00")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Проверить все включённые" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "История проверок" }).getAttribute("href")).toBe("/admin/news/runs");
+    expect(screen.queryByRole("link", { name: "Каталог" })).toBeNull();
+    expect(container.querySelector('[href*="sources/new"], [href*="sources/catalogue"]')).toBeNull();
+    expect(container.textContent).not.toMatch(/RSS|Atom|HTML|CSS|Приоритет|Доверие|поставщик/);
+    expect(screen.getAllByRole("main")).toHaveLength(1);
+    expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
+    expect((await axe(container)).violations).toEqual([]);
   });
 
-  it("distinguishes collection warnings from a failed source", async () => {
-    vi.mocked(adminFetch).mockImplementation(async path => path === "/news/sources"
-      ? [{ ...newsSource, active: true, health: "degraded", last_success_at: "2026-10-14T08:00:00Z", last_error: "Не удалось загрузить текст некоторых материалов." }] : []);
+  it("keeps an empty prepared catalogue empty without manual connection actions", async () => {
+    vi.mocked(adminFetch).mockResolvedValue([]);
     render(<AdminLayout>{await NewsSourcesPage()}</AdminLayout>);
-    expect(screen.getByText("Есть предупреждения")).toBeTruthy();
-    expect(screen.getByText("Не удалось загрузить текст некоторых материалов.")).toBeTruthy();
-    expect(screen.queryByText("Ошибка обхода")).toBeNull();
+    expect(screen.getByText("Готовых источников пока нет.")).toBeTruthy();
+    expect(screen.queryByRole("switch")).toBeNull();
+    expect(screen.queryByRole("button", { name: /Проверить/ })).toBeNull();
+    expect(adminFetch).toHaveBeenCalledExactlyOnceWith("/news/sources");
   });
 
   it.each([
-    ["all active sources", "", {}],
-    ["one paused source", newsSource.slug, { source_slug: newsSource.slug }],
-  ])("starts a manual check of %s directly from the sources page", async (_label, selected, body) => {
+    ["all active sources", "Проверить все включённые", {}],
+    ["one paused source", `Проверить сейчас: ${newsSource.name}`, { source_slug: newsSource.slug }],
+  ])("starts a manual check of %s directly from the sources page", async (_label, button, body) => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify({ job_id: 9, job_slug: newsJob.slug, status: "queued" }), { status: 202 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ ...newsJob, kind: "collect", progress: { sources_done: 1, new_count: 2 }, result: {} })));
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ...newsJob, kind: "collect", result: {} })));
     vi.stubGlobal("fetch", fetchMock);
     try {
       render(<AdminLayout>{await NewsSourcesPage()}</AdminLayout>);
-      const controls = within(screen.getByRole("region", { name: "Ручная проверка публикаций" }));
-      expect(fetchMock).not.toHaveBeenCalled();
-      fireEvent.change(controls.getByLabelText("Источник для сбора"), { target: { value: selected } });
-      fireEvent.click(controls.getByRole("button", { name: "Проверить сейчас" }));
-      await controls.findByText("Новых");
-      expect(fetchMock).toHaveBeenCalledTimes(2);
+      fireEvent.click(screen.getByRole("button", { name: button }));
+      await screen.findByRole("link", { name: "Открыть отчёт задания" });
       expect(fetchMock.mock.calls[0][0]).toBe("/api/admin/news/jobs/collect");
-      expect(fetchMock.mock.calls[0][1]).toMatchObject({ method: "POST", credentials: "same-origin", cache: "no-store" });
       expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual(body);
-      expect(fetchMock.mock.calls[1][0]).toBe(`/api/admin/news/jobs/${newsJob.slug}`);
-      expect(controls.getByRole("link", { name: "Открыть отчёт задания" }).getAttribute("href")).toBe(`/admin/news/jobs/${newsJob.slug}`);
-      expect(controls.getByRole("link", { name: "История проверок" }).getAttribute("href")).toBe("/admin/news/runs");
-    } finally {
-      vi.unstubAllGlobals();
-    }
-  });
-
-  it("does not offer a manual collection before any source is connected", async () => {
-    vi.mocked(adminFetch).mockImplementation(async path => path === "/news/sources/catalogue" ? sourceCatalogue : []);
-    render(<AdminLayout>{await NewsSourcesPage()}</AdminLayout>);
-    expect(screen.queryByRole("button", { name: "Проверить сейчас" })).toBeNull();
-    expect(screen.getByText(/Подключённых источников пока нет/)).toBeTruthy();
-    expect(screen.getByRole("link", { name: "Каталог источников (98)" })).toBeTruthy();
-  });
-
-  it("prefills a source selected in the catalogue by its stable ID", async () => {
-    render(<AdminLayout>{await NewsNewSourcePage({ searchParams: Promise.resolve({ catalogue: "eng-simon" }) })}</AdminLayout>);
-    expect((screen.getByLabelText("Название (обязательно)") as HTMLInputElement).value).toBe("Simon Willison");
-    expect((screen.getByLabelText("URL источника (обязательно)") as HTMLInputElement).value).toBe("https://simonwillison.net/atom/entries/");
-    expect((screen.getByLabelText("Способ получения") as HTMLSelectElement).value).toBe("rss");
-  });
-
-  it.each(["missing-id", "tools-crossref", "authors-hinton"])("keeps unsupported catalogue ID %s out of the source form", async catalogue => {
-    render(<AdminLayout>{await NewsNewSourcePage({ searchParams: Promise.resolve({ catalogue }) })}</AdminLayout>);
-    expect(screen.getByText(/Этот пункт каталога недоступен для подключения/).getAttribute("role")).toBe("status");
-    expect((screen.getByLabelText("URL источника (обязательно)") as HTMLInputElement).value).toBe("");
+    } finally { vi.unstubAllGlobals(); }
   });
 
   it("renders accessible collection filters, two format choices, and the empty state", async () => {
@@ -156,10 +120,10 @@ describe("protected editorial routes", () => {
     expect((await axe(container)).violations).toEqual([]);
   });
 
-  it("guides an empty installation to source discovery", async () => {
+  it("guides an empty installation to prepared sources", async () => {
     vi.mocked(adminFetch).mockImplementation(async path => path.startsWith("/news/items?") ? paged : []);
     render(<AdminLayout>{await NewsItemsPage(emptyParams())}</AdminLayout>);
-    expect(screen.getByRole("link", { name: "Добавить источник" }).getAttribute("href")).toBe("/admin/news/sources/new");
+    expect(screen.getByRole("link", { name: "Открыть источники" }).getAttribute("href")).toBe("/admin/news/sources");
   });
 
   it("keeps the publication plan inside the editorial navigation", async () => {
@@ -313,7 +277,7 @@ describe("protected editorial routes", () => {
     const { container } = render(<AdminLayout>{await NewsItemPage({ params: Promise.resolve({ id: "4" }) })}</AdminLayout>);
     expect(screen.getByText("Недостаточно текста")).toBeTruthy();
     expect(screen.getByText("Сбор материала: Не удалось загрузить страницу.")).toBeTruthy();
-    expect(screen.getByRole("link", { name: "Открыть источник для повторного сбора" }).getAttribute("href")).toBe(`/admin/news/sources/${newsSource.slug}`);
+    expect(screen.getByRole("link", { name: "Открыть источник для повторного сбора" }).getAttribute("href")).toBe(`/admin/news/sources#${newsSource.slug}`);
     expect(screen.queryByRole("button", { name: "Повторить анализ" })).toBeNull();
     expect(screen.queryByText(/Материал ожидает анализа/)).toBeNull();
     expect((await axe(container)).violations).toEqual([]);
@@ -343,9 +307,6 @@ describe("protected editorial routes", () => {
 
   it.each([
     ["sources", () => NewsSourcesPage()],
-    ["source catalogue", () => NewsCataloguePage()],
-    ["new source", () => NewsNewSourcePage(emptyParams())],
-    ["source settings", () => NewsSourcePage({ params: Promise.resolve({ slug: newsSource.slug }) })],
     ["taxonomy", () => NewsTopicsPage()],
     ["settings", () => NewsSettingsPage()],
     ["runs", () => NewsRunsPage(emptyParams())],

@@ -269,19 +269,6 @@ async def test_stale_worker_cannot_commit_ingestion_or_analysis(db_session):
     assert await db_session.scalar(select(func.count()).select_from(NewsAnalysis)) == 0
 
 
-async def test_two_schedulers_enqueue_only_one_durable_slot(session_factory):
-    async def enqueue():
-        async with session_factory() as session:
-            return await NewsJobRepository(session).enqueue_scheduled(
-                "2026-10-08T08:00:00+04:00"
-            )
-
-    results = await asyncio.gather(enqueue(), enqueue())
-    assert sum(row is not None for row in results) == 1
-    async with session_factory() as session:
-        assert await session.scalar(select(func.count()).select_from(NewsJob)) == 1
-
-
 async def test_failed_analysis_does_not_starve_pending_backlog(db_session):
     source = await add_source(db_session)
     items = NewsItemRepository(db_session)

@@ -2,11 +2,12 @@
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, CheckConstraint, DateTime, Integer, String, Text, func
+from sqlalchemy import Boolean, CheckConstraint, DateTime, Integer, String, Text, func, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.db.models.base import Base
+from src.core.news_source_schedule import DEFAULT_SOURCE_SCHEDULE
 from src.db.models.news_catalog import (
     NewsCategory,
     NewsTopic,
@@ -30,8 +31,16 @@ class NewsSource(Base):
     slug: Mapped[str] = mapped_column(
         String(160), unique=True, doc="Stable readable address.", comment="Stable readable address."
     )
+    profile_id: Mapped[str | None] = mapped_column(
+        String(160), unique=True, doc="Verified code-owned profile identity.",
+        comment="Verified code-owned profile identity.",
+    )
     name: Mapped[str] = mapped_column(
         String(200), doc="Display name.", comment="Display name."
+    )
+    description: Mapped[str] = mapped_column(
+        Text, default="", server_default="", doc="Editorial source description.",
+        comment="Editorial source description.",
     )
     url: Mapped[str] = mapped_column(
         Text, doc="Checked feed or listing URL.", comment="Checked feed or listing URL."
@@ -44,10 +53,19 @@ class NewsSource(Base):
     )
     active: Mapped[bool] = mapped_column(
         Boolean,
-        default=True,
+        default=False,
         index=True,
         doc="Collection enabled.",
         comment="Collection enabled.",
+    )
+    schedule: Mapped[dict] = mapped_column(
+        JSONB, default=lambda: {**DEFAULT_SOURCE_SCHEDULE, "times": list(DEFAULT_SOURCE_SCHEDULE["times"])},
+        server_default=text("'{\"mode\":\"daily\",\"times\":[\"08:00\",\"14:00\",\"20:00\"]}'::jsonb"),
+        doc="Source calendar in Europe/Samara.", comment="Source calendar in Europe/Samara.",
+    )
+    next_check_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), index=True, doc="Next automatic collection start.",
+        comment="Next automatic collection start.",
     )
     priority: Mapped[int] = mapped_column(
         Integer, default=50, doc="Collection priority.", comment="Collection priority."

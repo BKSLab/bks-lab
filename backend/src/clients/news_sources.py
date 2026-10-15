@@ -18,6 +18,7 @@ from soupsieve import SelectorSyntaxError
 
 from src.clients.news_http import NewsHttpResponse, SafeNewsHttpClient, validate_public_url
 from src.exceptions.news_sources import NewsSourceError
+from src.news_sources import SourceProfile, get_source_profile
 from src.schemas.news_collection import NEWS_MIN_CONTENT_CHARS, CollectedItem, CollectionResult, DiscoveryResult
 
 TRACKING_PARAMETERS = {"fbclid", "gclid", "yclid", "mc_cid", "mc_eid"}
@@ -150,9 +151,50 @@ class NewsSourceClient:
 
     SUFFICIENT_DESCRIPTION_CHARS = 600
 
-    def __init__(self, http: SafeNewsHttpClient, max_excerpt_chars: int = 3000) -> None:
+    def __init__(
+        self, http: SafeNewsHttpClient, max_excerpt_chars: int = 3000,
+        *, profile: SourceProfile | None = None,
+    ) -> None:
         self.http = http
         self.max_excerpt_chars = max_excerpt_chars
+        self.profile = profile
+
+    async def fetch_profile(
+        self, profile_id: str, *, etag: str | None = None,
+        last_modified: str | None = None, first_run: bool = False,
+        max_items: int = 50, lookback_days: int = 30,
+        max_excerpt_chars: int | None = None, cutoff: datetime | None = None,
+        known_urls: set[str] | None = None,
+    ) -> CollectionResult:
+        """Collect a supported publisher using only its code-owned adapter.
+
+        Args:
+            profile_id: Stable identifier from the verified source registry.
+            etag: Previously observed feed ETag.
+            last_modified: Previously observed Last-Modified value.
+            first_run: Apply the initial lookback window when no cutoff was given.
+            max_items: Maximum publications retained in this observation.
+            lookback_days: Initial history window.
+            max_excerpt_chars: Optional bounded article fragment size.
+            cutoff: Earliest publication date to retain.
+            known_urls: Existing publication identities allowed past the cutoff.
+
+        Returns:
+            Publications and collection diagnostics from the supported adapter.
+
+        Raises:
+            NewsSourceError: The profile is unsupported or the source is unavailable.
+        """
+        profile = get_source_profile(profile_id)
+        if profile is None:
+            raise NewsSourceError("unsupported_source", "Источник не поддерживается текущей версией приложения.")
+        adapter = NewsSourceClient(self.http, self.max_excerpt_chars, profile=profile)
+        return await adapter.fetch(
+            url=profile.url, kind=profile.kind, config=profile.config,
+            etag=etag, last_modified=last_modified, first_run=first_run,
+            max_items=max_items, lookback_days=lookback_days,
+            max_excerpt_chars=max_excerpt_chars, cutoff=cutoff, known_urls=known_urls,
+        )
 
     async def discover(
         self, url: str, kind: str | None = None, config: dict | None = None,
@@ -201,7 +243,8 @@ class NewsSourceClient:
         if response.status_code == 304:
             return CollectionResult([], etag, last_modified, True, response.url, kind, http_status=304)
         self._require_ok(response)
-        adapter = self if max_excerpt_chars is None else NewsSourceClient(self.http, max_excerpt_chars)
+        adapter = (self if max_excerpt_chars is None
+                   else NewsSourceClient(self.http, max_excerpt_chars, profile=self.profile))
         if cutoff is None and first_run:
             cutoff = datetime.now(timezone.utc) - timedelta(days=lookback_days)
         observations = _CollectionObservations()
@@ -219,10 +262,14 @@ class NewsSourceClient:
 
     async def refetch(
         self, items: list[CollectedItem], *, max_excerpt_chars: int | None = None,
+        profile_id: str | None = None,
     ) -> CollectionResult:
         """Fetch stored publication URLs again, retaining identity without reusing old text."""
         warnings: list[str] = []
-        adapter = self if max_excerpt_chars is None else NewsSourceClient(self.http, max_excerpt_chars)
+        profile = get_source_profile(profile_id) if profile_id else self.profile
+        if profile_id and profile is None:
+            raise NewsSourceError("unsupported_source", "Источник не поддерживается текущей версией приложения.")
+        adapter = NewsSourceClient(self.http, max_excerpt_chars or self.max_excerpt_chars, profile=profile)
         refreshed = await asyncio.gather(*(
             adapter._enrich(replace(item, description="", content=""), warnings) for item in items
         ))
@@ -246,8 +293,19 @@ class NewsSourceClient:
         if kind == "rss" or (kind is None and is_feed):
             if re.search(br"<!\s*(?:DOCTYPE|ENTITY)\b", body, re.IGNORECASE):
                 raise NewsSourceError("unsafe_xml", "Лента с объявлениями XML-сущностей не поддерживается.")
-            return "rss", self._parse_feed(body, response.url, limit, cutoff, known_urls, observations)
-        return "html", self._parse_html(body, response.url, config, limit, cutoff, known_urls, observations)
+            result = "rss", self._parse_feed(body, response.url, limit, cutoff, known_urls, observations)
+        else:
+            result = "html", self._parse_html(body, response.url, config, limit, cutoff, known_urls, observations)
+        if self.profile and self.profile.publication_path_pattern:
+            pattern = self.profile.publication_path_pattern
+            kept = []
+            for item in result[1]:
+                if re.search(pattern, urlsplit(item.url).path):
+                    kept.append(item)
+                elif observations is not None:
+                    observations.skip(item.title, item.url, "Ссылка не относится к публикациям источника.", "filter")
+            return result[0], kept
+        return result
 
     def _parse_feed(
         self, body: bytes, base: str, limit: int, cutoff: datetime | None = None,
@@ -505,7 +563,9 @@ class NewsSourceClient:
         return node.select_one(configured or fallback)
 
     async def _enrich(self, item: CollectedItem, warnings: list[str]) -> CollectedItem:
-        if len(item.content or item.description) >= self.SUFFICIENT_DESCRIPTION_CHARS:
+        if (not self.profile or self.profile.kind == "rss") and (
+            len(item.content or item.description) >= self.SUFFICIENT_DESCRIPTION_CHARS
+        ):
             return self._collection_quality(item, "ready")
         try:
             response = await self.http.get(item.url)
@@ -518,6 +578,13 @@ class NewsSourceClient:
             return self._collection_quality(item, "fetch_failed", warning, stage="fetch", error_code=error_code)
         enriched = replace(item, canonical_url=canonical or item.canonical_url,
                            content=content if len(content) > len(item.content) else item.content)
+        if self.profile and self.profile.kind == "html":
+            # A card teaser is not proof that the publisher's article layout still works.
+            enriched = replace(enriched, content=content)
+            if not content:
+                warning = "Не найден поддерживаемый текст публикации; сохранена карточка источника."
+                warnings.append(warning)
+                return self._collection_quality(enriched, "insufficient_text", warning, stage="extraction")
         if len(enriched.content or enriched.description) >= NEWS_MIN_CONTENT_CHARS:
             return self._collection_quality(enriched, "ready")
         warning = "Недостаточно текста для анализа; сохранена карточка источника."
@@ -573,6 +640,17 @@ class NewsSourceClient:
         # A cross-domain canonical is untrusted attribution, not proof of identity.
         if canonical and urlsplit(canonical).hostname != urlsplit(response.url).hostname:
             canonical = None
+        if self.profile:
+            for selector in self.profile.article_selectors:
+                fragments = [self._article_fragment(node) for node in soup.select(selector)
+                             if not node.find_parent(["nav", "header", "footer", "form"])
+                             and not any(ancestor.has_attr("hidden") or ancestor.get("aria-hidden") == "true"
+                                         or ancestor.get("role") in {"navigation", "banner", "contentinfo", "dialog"}
+                                         for ancestor in [node, *node.parents])]
+                content = " ".join(dict.fromkeys(fragment for fragment in fragments if fragment))
+                if len(content) >= NEWS_MIN_CONTENT_CHARS:
+                    return canonical, content[:self.max_excerpt_chars]
+            return canonical, ""
         # A declared article body can live inside a layout <aside> (e.g. transcripts).
         # Clean its children independently, before pruning page-level sidebars.
         preferred = list(soup.select(ARTICLE_BODY_SELECTOR))
@@ -624,4 +702,8 @@ class NewsSourceClient:
         fragment = BeautifulSoup(node.decode_contents(), "html.parser")
         for noise in fragment.select(ARTICLE_NOISE_SELECTOR):
             noise.decompose()
+        if self.profile:
+            for selector in self.profile.article_noise_selectors:
+                for noise in fragment.select(selector):
+                    noise.decompose()
         return clean_text(str(fragment), limit=self.max_excerpt_chars)

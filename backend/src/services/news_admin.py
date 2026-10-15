@@ -6,7 +6,6 @@ from pydantic import ValidationError
 
 from src.core.news_settings import NewsSettings
 from src.exceptions.news import (
-    NewsDiscoveryRequiredError,
     NewsInsufficientTextError,
     NewsNotFoundError,
     NewsValidationError,
@@ -27,7 +26,6 @@ from src.schemas.news import (
     CollectRequest,
     DecisionRequest,
     DecisionRow,
-    DiscoverRequest,
     ItemDetail,
     ItemRow,
     JobRow,
@@ -37,7 +35,6 @@ from src.schemas.news import (
     RunItemRow,
     SettingsPatch,
     SettingsRow,
-    SourceCreate,
     SourcePatch,
     SourceRow,
 )
@@ -67,15 +64,7 @@ class NewsAdminService:
 
     @staticmethod
     def source_row(row: Any) -> SourceRow:
-        return SourceRow(
-            **{
-                key: getattr(row, key)
-                for key in SourceRow.model_fields
-                if key not in {"topic_ids", "category_ids"}
-            },
-            topic_ids=[item.id for item in row.topics],
-            category_ids=[item.id for item in row.categories],
-        )
+        return SourceRow(**{key: getattr(row, key) for key in SourceRow.model_fields})
 
     @staticmethod
     def analysis_row(row: Any) -> AnalysisRow:
@@ -116,71 +105,23 @@ class NewsAdminService:
         )
 
     async def list_sources(self) -> list[SourceRow]:
-        """Read source health and editable configuration without internal cursor state."""
+        """Read verified source profiles and their collection preferences."""
         return [self.source_row(row) for row in await self.sources.list()]
 
     async def get_source(self, source_slug: str) -> SourceRow:
         """Read source configuration by its stable public address."""
         source = await self.sources.get_by_slug(source_slug)
-        if source is None:
+        if source is None or source.profile_id is None:
             raise NewsNotFoundError
         return self.source_row(source)
 
-    async def discover(self, data: DiscoverRequest) -> QueuedJob:
-        """Queue an SSRF-protected asynchronous preview, never fetch from the request handler."""
-        job = await self.jobs.enqueue("discover", payload=data.model_dump())
-        return QueuedJob(job_id=job.id, job_slug=job.slug, status=job.status)
-
-    async def _validate_taxonomy(self, values: dict) -> None:
-        for field, kind in (("topic_ids", "topics"), ("category_ids", "categories")):
-            if field in values:
-                existing = {row.id for row in await self.catalog.list(kind)}
-                if not set(values[field]) <= existing:
-                    raise NewsValidationError
-
-    async def _checked_url(
-        self, discovery_job_id: int | None, *, url: str, kind: str, config: dict
-    ) -> str:
-        job = await self.jobs.get(discovery_job_id) if discovery_job_id else None
-        if (
-            job is None
-            or job.kind != "discover"
-            or job.status != "completed"
-            or not job.result
-        ):
-            raise NewsDiscoveryRequiredError
-        if (
-            job.result.get("kind") != kind
-            or config != job.payload.get("config", {})
-            or url not in {job.payload.get("url"), job.result.get("url")}
-        ):
-            raise NewsDiscoveryRequiredError
-        return job.result.get("url") or url
-
-    async def create_source(self, data: SourceCreate) -> SourceRow:
-        """Save only a source matching a successfully completed adapter preview."""
-        values = data.model_dump(exclude={"discovery_job_id"})
-        values["url"] = await self._checked_url(
-            data.discovery_job_id, url=data.url, kind=data.kind, config=data.config
-        )
-        await self._validate_taxonomy(values)
-        return self.source_row(await self.sources.create(values))
-
     async def update_source(self, source_slug: str, data: SourcePatch) -> SourceRow:
-        """Require a fresh matching preview for URL, adapter or selector changes."""
+        """Update only source enablement and its individual collection calendar."""
         source = await self.sources.get_by_slug(source_slug)
-        if source is None:
+        if source is None or source.profile_id is None:
             raise NewsNotFoundError
-        values = data.model_dump(exclude_unset=True, exclude={"discovery_job_id"})
-        expected = {key: getattr(source, key) for key in ("url", "kind", "config")}
-        effective = {
-            **expected,
-            **{key: value for key, value in values.items() if key in expected},
-        }
-        if effective != expected:
-            values["url"] = await self._checked_url(data.discovery_job_id, **effective)
-        await self._validate_taxonomy(values)
-        row = await self.sources.update(source.id, values, expected=expected)
+        values = data.model_dump(exclude_unset=True, mode="json")
+        row = await self.sources.update_preferences(source.id, values)
         if row is None:
             raise NewsNotFoundError
         return self.source_row(row)
@@ -275,7 +216,7 @@ class NewsAdminService:
     async def collect(self, data: CollectRequest) -> QueuedJob:
         """Queue a collection run with an optional existing source scope."""
         source = await self.sources.get_by_slug(data.source_slug) if data.source_slug is not None else None
-        if data.source_slug is not None and source is None:
+        if data.source_slug is not None and (source is None or source.profile_id is None):
             raise NewsNotFoundError
         job = await self.jobs.enqueue("collect", source_id=source.id if source else None)
         return QueuedJob(job_id=job.id, job_slug=job.slug, status=job.status)
@@ -357,8 +298,6 @@ class NewsAdminService:
         """Combine environment defaults and editorial overrides, exposing only LLM readiness."""
         names = (
             "enabled",
-            "timezone",
-            "schedule",
             "initial_lookback_days",
             "max_items_per_source",
             "max_excerpt_chars",
@@ -367,8 +306,12 @@ class NewsAdminService:
             "history_retention_days",
         )
         defaults = {name: getattr(self.config, name) for name in names}
+        supported = {
+            key: value for key, value in (await self.settings.get()).items()
+            if key in NewsSettingsData.model_fields
+        }
         policy = NewsSettingsData.model_validate(
-            {**defaults, **await self.settings.get()}
+            {**defaults, **supported}
         )
         return SettingsRow(
             **policy.model_dump(),

@@ -4,6 +4,7 @@ import asyncio
 import json
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock
 
@@ -15,7 +16,7 @@ from sqlalchemy import func, select, update
 
 from src.background_tasks.news_health import is_healthy
 from src.clients.news_http import NewsHttpResponse, SafeNewsHttpClient
-from src.background_tasks.news_scheduler import NewsScheduler, latest_scheduled_slot
+from src.background_tasks.news_scheduler import NewsScheduler
 from src.clients.news_sources import NewsSourceClient
 from src.core.news_settings import NewsSettings
 from src.db.models.news_analyses import NewsAnalysis
@@ -23,6 +24,7 @@ from src.db.models.news_items import NewsItem
 from src.db.models.news_jobs import NewsJob, NewsSourceRun
 from src.dependencies.news_clients import news_analysis_service
 from src.exceptions.llm import LlmApiRequestError
+from src.news_sources import SourceProfile
 from src.repositories.news_analyses import NewsAnalysisRepository
 from src.repositories.news_catalog import NewsCatalogRepository
 from src.repositories.news_items import NewsItemRepository
@@ -71,7 +73,7 @@ def worker_config(tmp_path):
 @pytest.fixture
 def collector():
     client = AsyncMock(spec=NewsSourceClient)
-    client.fetch.return_value = CollectionResult(
+    client.fetch_profile.return_value = CollectionResult(
         [CollectedItem(
             external_id="post-1", url="https://source.example/article",
             canonical_url="https://source.example/article", title="A useful material",
@@ -107,7 +109,10 @@ async def add_source(scope):
     async with scope() as repositories:
         return await repositories.sources.create({
             "name": "Fixture source", "url": "https://source.example/feed", "kind": "rss",
-            "config": {}, "interval_hours": 1, "topic_ids": [], "category_ids": [],
+            "profile_id": "fixture-source", "active": True,
+            "config": {}, "topic_ids": [], "category_ids": [],
+            "schedule": {"mode": "daily", "times": ["08:00", "14:00", "20:00"]},
+            "profile_id": "fixture-source", "active": True,
         })
 
 
@@ -122,13 +127,13 @@ async def test_collection_commits_before_failed_analysis_and_retry_limit(
 ):
     source = await add_source(worker_scope)
     collect_job = await enqueue_collect(worker_scope, source.id)
-    collected = collector.fetch.return_value
+    collected = collector.fetch_profile.return_value
 
     async def fetch_without_database_session(**kwargs):
         assert not worker_scope.is_active()
         return collected
 
-    collector.fetch.side_effect = fetch_without_database_session
+    collector.fetch_profile.side_effect = fetch_without_database_session
     analyzer.analyze.side_effect = LlmApiRequestError("fixture failure")
 
     assert await pipeline.run_once(("collect",))
@@ -184,12 +189,12 @@ async def test_unchanged_collection_does_not_schedule_another_analysis(
     await enqueue_collect(worker_scope, source.id)
     assert await pipeline.run_once(("collect",))
     assert await pipeline.run_once(("analyze",))
-    collector.fetch.return_value = CollectionResult(collector.fetch.return_value.items)
+    collector.fetch_profile.return_value = CollectionResult(collector.fetch_profile.return_value.items)
     await enqueue_collect(worker_scope, source.id)
     assert await pipeline.run_once(("collect",))
     assert not await pipeline.run_once(("analyze",))
     analyzer.analyze.assert_awaited_once()
-    assert collector.fetch.await_args.kwargs["etag"] == '"version-one"'
+    assert collector.fetch_profile.await_args.kwargs["etag"] == '"version-one"'
     async with worker_scope() as repositories:
         stored_source = await repositories.sources.get(source.id)
         assert stored_source.etag is None
@@ -228,20 +233,24 @@ async def test_manual_reanalysis_replaces_the_existing_identity_output(
 
 
 @pytest.mark.asyncio
-async def test_two_schedulers_and_restart_deduplicate_the_same_daily_slot(
-    pipeline, worker_config, session_factory,
+async def test_two_schedulers_and_restart_deduplicate_the_same_source_slot(
+    worker_scope, worker_config, collector, analyzer, session_factory,
 ):
     now = datetime(2026, 10, 8, 11, 0, tzinfo=timezone.utc)
+    pipeline = NewsPipeline(
+        repositories=worker_scope, collector=collector, analyzer=analyzer,
+        config=worker_config, utc_now=lambda: now,
+    )
+    source = await add_source(worker_scope)
+    async with worker_scope() as repositories:
+        await repositories.sources.update(source.id, {"next_check_at": now - timedelta(days=2)})
     config_two = worker_config.model_copy(update={"health_file": worker_config.health_file.with_name("second-health")})
     runners = [
         NewsScheduler(pipeline=pipeline, scheduler=AsyncIOScheduler(), config=config, utc_now=lambda: now)
         for config in (worker_config, config_two)
     ]
     await asyncio.gather(*(runner.refresh() for runner in runners))
-    for runner in runners:
-        daily_jobs = runner._scheduler.get_jobs()
-        assert len(daily_jobs) == 3
-        assert all(job.max_instances == 1 and job.coalesce for job in daily_jobs)
+    assert all(runner._scheduler.get_jobs() == [] for runner in runners)
     restarted = NewsScheduler(
         pipeline=pipeline, scheduler=AsyncIOScheduler(), config=worker_config, utc_now=lambda: now,
     )
@@ -250,7 +259,13 @@ async def test_two_schedulers_and_restart_deduplicate_the_same_daily_slot(
     async with session_factory() as session:
         jobs = list((await session.scalars(select(NewsJob))).all())
         assert len(jobs) == 1
-        assert jobs[0].dedupe_key == "scheduled:Europe/Samara:2026-10-08:14:00"
+        assert jobs[0].source_id == source.id
+        assert jobs[0].dedupe_key == f"scheduled:{source.id}:2026-10-08T10:00:00+00:00"
+    # Windows file timestamps can briefly lead the system clock after touch().
+    for _ in range(10):
+        if is_healthy(worker_config.health_file, worker_config.health_max_age_seconds):
+            break
+        await asyncio.sleep(0.01)
     assert is_healthy(worker_config.health_file, worker_config.health_max_age_seconds)
 
 
@@ -342,7 +357,7 @@ async def test_four_analysis_requests_overlap_while_fifth_waits_for_a_free_worke
 
 
 @pytest.mark.asyncio
-async def test_fetch_duration_does_not_skip_the_next_six_hour_slot(
+async def test_fetch_duration_does_not_skip_the_next_source_calendar_start(
     worker_scope, worker_config, collector, analyzer,
 ):
     source = await add_source(worker_scope)
@@ -353,16 +368,16 @@ async def test_fetch_duration_does_not_skip_the_next_six_hour_slot(
         config=worker_config, utc_now=lambda: current[0],
     )
     async with worker_scope() as repositories:
-        await repositories.sources.update(source.id, {"interval_hours": 6})
-    await pipeline.enqueue_scheduled("Europe/Samara:2026-10-08:08:00")
+        await repositories.sources.update(source.id, {"next_check_at": first_slot})
+    await pipeline.enqueue_scheduled()
     assert await pipeline.run_once(("collect",))
     async with worker_scope() as repositories:
         await repositories.sources.update(source.id, {"last_success_at": first_slot + timedelta(seconds=10)})
 
     current[0] = first_slot + timedelta(hours=6)
-    await pipeline.enqueue_scheduled("Europe/Samara:2026-10-08:14:00")
+    await pipeline.enqueue_scheduled()
     assert await pipeline.run_once(("collect",))
-    assert collector.fetch.await_count == 2
+    assert collector.fetch_profile.await_count == 2
     async with worker_scope() as repositories:
         stored = await repositories.sources.get(source.id)
         assert stored.cursor["collected_at"] == current[0].isoformat()
@@ -404,7 +419,7 @@ async def test_shutdown_during_http_releases_job_without_advancing_cursor(
         entered.set()
         await asyncio.Event().wait()
 
-    collector.fetch.side_effect = waiting_fetch
+    collector.fetch_profile.side_effect = waiting_fetch
     async with worker_scope() as repositories:
         await repositories.settings.set({"enabled": False})
     runner = NewsScheduler(
@@ -449,7 +464,7 @@ async def test_lost_lease_cancels_source_and_does_not_overwrite_new_owner(
         finally:
             cancelled.set()
 
-    collector.fetch.side_effect = waiting_fetch
+    collector.fetch_profile.side_effect = waiting_fetch
     worker = asyncio.create_task(pipeline.run_once(("collect",)))
     await asyncio.wait_for(entered.wait(), timeout=3)
     async with session_factory() as session:
@@ -472,14 +487,14 @@ async def test_source_edit_during_fetch_discards_the_old_configuration_result(
 ):
     source = await add_source(worker_scope)
     await enqueue_collect(worker_scope, source.id)
-    collected = collector.fetch.return_value
+    collected = collector.fetch_profile.return_value
 
     async def edit_source_then_return(**kwargs):
         async with worker_scope() as repositories:
             await repositories.sources.update(source.id, {"url": "https://source.example/new-feed"})
         return collected
 
-    collector.fetch.side_effect = edit_source_then_return
+    collector.fetch_profile.side_effect = edit_source_then_return
     assert await pipeline.run_once(("collect",))
     async with session_factory() as session:
         assert await session.scalar(select(func.count()).select_from(NewsItem)) == 0
@@ -490,25 +505,18 @@ async def test_source_edit_during_fetch_discards_the_old_configuration_result(
         assert saved.last_error is None
 
 
-@pytest.mark.parametrize(
-    ("now", "zone", "expected"),
-    [
-        (datetime(2026, 10, 8, 1, 0, tzinfo=timezone.utc), "Europe/Samara", "Europe/Samara:2026-10-07:20:00"),
-        (datetime(2026, 10, 8, 4, 0, tzinfo=timezone.utc), "Europe/Samara", "Europe/Samara:2026-10-08:08:00"),
-        (datetime(2026, 10, 8, 20, 0, tzinfo=timezone.utc), "UTC", "UTC:2026-10-08:20:00"),
-    ],
-)
-def test_latest_scheduled_slot_preserves_local_day_and_start(now, zone, expected):
-    assert latest_scheduled_slot(now, ("08:00", "14:00", "20:00"), zone) == expected
-
-
 async def test_repeated_collection_keeps_import_boundary_without_backfilling_archive(
-    worker_scope, worker_config, analyzer,
+    worker_scope, worker_config, analyzer, monkeypatch,
 ):
     source = await add_source(worker_scope)
     now = datetime.now(timezone.utc)
     current = [now]
     http = AsyncMock(spec=SafeNewsHttpClient)
+    profile = SourceProfile(
+        id=source.profile_id, slug=source.slug, name=source.name, description="Fixture",
+        homepage_url="https://source.example", url=source.url, kind="rss",
+    )
+    monkeypatch.setattr("src.clients.news_sources.get_source_profile", lambda profile_id: profile)
     description = "A detailed account of the implementation, measurements and practical results. " * 12
 
     def feed(include_new=False):
@@ -545,20 +553,48 @@ async def test_repeated_collection_keeps_import_boundary_without_backfilling_arc
         assert (await repositories.sources.get(source.id)).cursor["initial_cutoff_at"] == cutoff
 
 
-async def test_manual_all_sources_bypasses_interval_but_scheduled_collection_does_not(
+async def test_manual_all_sources_runs_without_waiting_for_the_next_calendar_start(
     worker_scope, pipeline, collector,
 ):
     source = await add_source(worker_scope)
     await enqueue_collect(worker_scope, source.id)
     assert await pipeline.run_once(("collect",))
     async with worker_scope() as repositories:
-        await repositories.jobs.enqueue("collect", payload={"scheduled_slot": "UTC:2026-01-01:08:00"})
-    assert await pipeline.run_once(("collect",))
-    assert collector.fetch.await_count == 1
+        await repositories.sources.update(source.id, {"next_check_at": datetime.now(timezone.utc) + timedelta(hours=1)})
+    await pipeline.enqueue_scheduled()
+    assert not await pipeline.run_once(("collect",))
+    assert collector.fetch_profile.await_count == 1
     async with worker_scope() as repositories:
         await repositories.jobs.enqueue("collect")
     assert await pipeline.run_once(("collect",))
-    assert collector.fetch.await_count == 2
+    assert collector.fetch_profile.await_count == 2
+
+
+async def test_profile_rule_change_refreshes_text_without_moving_the_import_boundary(
+    worker_scope, pipeline, collector, monkeypatch,
+):
+    source = await add_source(worker_scope)
+    profile = SourceProfile(
+        id=source.profile_id, slug=source.slug, name=source.name, description="Fixture",
+        homepage_url="https://source.example", url=source.url, kind="rss",
+        article_selectors=(".article-body",),
+    )
+    current = [profile]
+    monkeypatch.setattr("src.services.news_pipeline.get_source_profile", lambda profile_id: current[0])
+    await enqueue_collect(worker_scope, source.id)
+    assert await pipeline.run_once(("collect",))
+    async with worker_scope() as repositories:
+        first = await repositories.sources.get(source.id)
+        cutoff = first.cursor["initial_cutoff_at"]
+        assert first.etag == '"version-one"'
+    current[0] = replace(profile, article_selectors=(".new-article-body",))
+    await enqueue_collect(worker_scope, source.id)
+    assert await pipeline.run_once(("collect",))
+    assert collector.fetch_profile.await_args.kwargs["etag"] is None
+    async with worker_scope() as repositories:
+        refreshed = await repositories.sources.get(source.id)
+        assert refreshed.cursor["initial_cutoff_at"] == cutoff
+        assert refreshed.cursor["profile_version"] == current[0].version
 
 
 async def test_failed_text_refresh_preserves_analysis_and_does_not_cache_failure(
@@ -570,8 +606,8 @@ async def test_failed_text_refresh_preserves_analysis_and_does_not_cache_failure
     assert await pipeline.run_once(("analyze",))
     async with worker_scope() as repositories:
         before = (await repositories.items.list_page(page=1, page_size=10))[0][0]
-    original = collector.fetch.return_value.items[0]
-    collector.fetch.return_value = CollectionResult([
+    original = collector.fetch_profile.return_value.items[0]
+    collector.fetch_profile.return_value = CollectionResult([
         CollectedItem(original.external_id, original.url, original.canonical_url, original.title,
                       metadata={"collection_status": "fetch_failed", "collection_warning": "Page unavailable."}),
     ], etag="bad-text", warnings=["Page unavailable."])
@@ -604,10 +640,10 @@ async def test_explicit_repair_fetches_existing_url_and_queues_only_one_analysis
         async with session_factory() as session:
             await session.execute(update(NewsItem).where(NewsItem.id == item.id).values(content="", excerpt=""))
             await session.commit()
-    collector.refetch.return_value = CollectionResult(collector.fetch.return_value.items)
+    collector.refetch.return_value = CollectionResult(collector.fetch_profile.return_value.items)
     assert await pipeline.run_once(("collect",))
     collector.refetch.assert_awaited_once()
-    assert collector.fetch.await_count == 1
+    assert collector.fetch_profile.await_count == 1
     assert await pipeline.enqueue_pending(await pipeline.get_settings()) == 0
     assert await pipeline.run_once(("analyze",))
     assert not await pipeline.run_once(("analyze",))

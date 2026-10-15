@@ -8,7 +8,6 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from src.clients.news_sources import NewsSourceClient, prepare_collected_item
 from src.core.news_settings import NewsSettings
@@ -17,6 +16,7 @@ from src.db.models.news_sources import NewsSource
 from src.exceptions.llm import LlmApiRequestError
 from src.exceptions.news import NewsLeaseLostError, NewsRepositoryError, NewsSourceChangedError
 from src.exceptions.news_sources import NewsSourceError
+from src.news_sources import get_source_profile
 from src.repositories.news_analyses import NewsAnalysisRepository
 from src.repositories.news_catalog import NewsCatalogRepository
 from src.repositories.news_items import NewsItemRepository
@@ -29,7 +29,7 @@ from src.schemas.news_collection import NEWS_MIN_CONTENT_CHARS, CollectedItem
 from src.services.news_analysis import NEWS_PROMPT_VERSION, NewsAnalysisService
 
 logger = logging.getLogger(__name__)
-NEWS_COLLECTION_VERSION = "news-text-v2"
+NEWS_COLLECTION_VERSION = "news-text-v3"
 
 
 @dataclass(frozen=True)
@@ -75,19 +75,22 @@ class NewsPipeline:
     async def get_settings(self) -> dict[str, Any]:
         """Combine environment defaults with the administrator's stored policy."""
         names = (
-            "enabled", "timezone", "schedule", "initial_lookback_days",
+            "enabled", "initial_lookback_days",
             "max_items_per_source", "max_excerpt_chars", "analysis_batch_size",
             "text_retention_days", "history_retention_days",
         )
         defaults = {name: getattr(self._config, name) for name in names}
         async with self._repositories() as repositories:
             stored = await repositories.settings.get()
-        return NewsSettingsData.model_validate({**defaults, **stored}).model_dump()
+        supported = {key: value for key, value in stored.items() if key in NewsSettingsData.model_fields}
+        return NewsSettingsData.model_validate({**defaults, **supported}).model_dump()
 
-    async def enqueue_scheduled(self, slot_key: str) -> None:
-        """Deduplicate a scheduled slot atomically across scheduler processes."""
+    async def enqueue_scheduled(self) -> None:
+        """Enqueue due source calendars atomically across scheduler processes."""
+        if not (await self.get_settings())["enabled"]:
+            return
         async with self._repositories() as repositories:
-            await repositories.jobs.enqueue_scheduled(slot_key)
+            await repositories.jobs.enqueue_due_sources(now=self._utc_now())
 
     async def recover(self) -> int:
         """Requeue expired leases, respecting the finite job retry limit."""
@@ -227,11 +230,13 @@ class NewsPipeline:
             else:
                 sources = await repositories.sources.list_active()
         started_at = self._collection_time(job)
-        if job.source_id is None and job.payload.get("scheduled_slot"):
+        if job.payload.get("scheduled_slot"):
             sources = [
                 source for source in sources
-                if self._source_is_due(source, started_at)
+                if source.active and source.profile_id is not None
+                and source.schedule == job.payload.get("source_schedule")
             ]
+        sources = [source for source in sources if source.profile_id is not None]
         progress.update(sources_total=len(sources), sources_done=0, new=0, updated=0, unchanged=0, skipped=0, errors=0, warnings=0)
         results = await asyncio.gather(
             *(self._collect_source(source, job, owner, progress, policy, started_at) for source in sources),
@@ -264,7 +269,12 @@ class NewsPipeline:
                 )
                 cursor = source.cursor or {}
                 cutoff = self._collection_cutoff(source, policy, first_completed)
-                current_parser = cursor.get("collection_version") == NEWS_COLLECTION_VERSION
+                profile = get_source_profile(source.profile_id)
+                profile_version = profile.version if profile is not None else None
+                current_parser = (
+                    cursor.get("collection_version") == NEWS_COLLECTION_VERSION
+                    and cursor.get("profile_version") == profile_version
+                )
                 repair_ids = job.payload.get("repair_item_ids")
                 run = await repositories.runs.begin(
                     source.id, job.id, owner_token=owner,
@@ -290,10 +300,10 @@ class NewsPipeline:
                             published_at=item.published_at, updated_at=item.updated_at,
                             metadata=item.metadata_json or {},
                         ) for item in previous_items
-                    ], max_excerpt_chars=policy["max_excerpt_chars"])
+                    ], max_excerpt_chars=policy["max_excerpt_chars"], profile_id=source.profile_id)
                 else:
-                    collected = await self._collector.fetch(
-                        url=source.url, kind=source.kind, config=source.config,
+                    collected = await self._collector.fetch_profile(
+                        profile_id=source.profile_id,
                         etag=source.etag if current_parser else None,
                         last_modified=source.last_modified if current_parser else None,
                         first_run=source.last_success_at is None,
@@ -325,6 +335,7 @@ class NewsPipeline:
                             **cursor, "collected_at": started_at.isoformat(),
                             "initial_cutoff_at": cutoff.isoformat(),
                             "collection_version": NEWS_COLLECTION_VERSION,
+                            "profile_version": profile_version,
                         },
                         etag=collected.etag if warning is None else None,
                         last_modified=collected.last_modified if warning is None else None,
@@ -455,31 +466,17 @@ class NewsPipeline:
         return initial - timedelta(days=policy["initial_lookback_days"])
 
     def _collection_time(self, job: NewsJob) -> datetime:
-        """Use a nominal slot so fetch duration cannot skip the next interval."""
+        """Keep a delayed run tied to its nominal UTC calendar occurrence."""
         now = self._utc_now()
         slot = job.payload.get("scheduled_slot")
         if isinstance(slot, str):
             try:
-                zone, date, hour, minute = slot.rsplit(":", 3)
-                scheduled = datetime.fromisoformat(f"{date}T{hour}:{minute}")
-                scheduled = scheduled.replace(tzinfo=ZoneInfo(zone)).astimezone(timezone.utc)
-                return min(scheduled, now)
-            except (ValueError, ZoneInfoNotFoundError):
-                pass
-        return now
-
-    @staticmethod
-    def _source_is_due(source: NewsSource, started_at: datetime) -> bool:
-        previous = source.last_success_at
-        recorded = (source.cursor or {}).get("collected_at")
-        if isinstance(recorded, str):
-            try:
-                parsed = datetime.fromisoformat(recorded)
-                if parsed.tzinfo is not None:
-                    previous = parsed
+                scheduled = datetime.fromisoformat(slot)
+                if scheduled.tzinfo is not None:
+                    return min(scheduled.astimezone(timezone.utc), now)
             except ValueError:
                 pass
-        return previous is None or previous + timedelta(hours=source.interval_hours) <= started_at
+        return now
 
     @staticmethod
     def _safe_error(error: Exception) -> tuple[str, bool]:

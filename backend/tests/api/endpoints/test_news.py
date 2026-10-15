@@ -8,7 +8,7 @@ from fastapi.routing import APIRoute
 from sqlalchemy import func, select
 
 from main import app
-from src.db.models import NewsJob, NewsRunItem, NewsSource, NewsSourceCatalogueEntry
+from src.db.models import NewsJob, NewsRunItem, NewsSource
 from src.dependencies.admin import check_admin_origin, require_admin
 from src.repositories.news_analyses import NewsAnalysisRepository
 from src.repositories.news_items import NewsItemRepository
@@ -17,13 +17,9 @@ from src.repositories.news_runs import NewsRunRepository
 from src.repositories.news_sources import NewsSourceRepository
 from tests.api.endpoints.test_admin import ORIGIN, admin_config as admin_config, login
 from tests.news_helpers import add_source, analysis_data, collected
-from scripts.seed_news import load_source_catalogue, seed_news
 
 ROUTES = [
     ("GET", "/sources"),
-    ("GET", "/sources/catalogue"),
-    ("POST", "/sources"),
-    ("POST", "/sources/discover"),
     ("GET", "/sources/example"),
     ("PATCH", "/sources/example"),
     ("GET", "/topics"),
@@ -46,25 +42,22 @@ ROUTES = [
 ]
 
 
-async def test_catalogue_reads_persisted_suggestions_without_connecting_sources(
-    client, session_factory, db_session,
-):
-    await seed_news(session_factory, load_source_catalogue())
-    row = await db_session.get(NewsSourceCatalogueEntry, "labs-openai")
-    row.data = {**row.data, "description": "Updated catalogue notes"}
-    await db_session.commit()
+async def test_sources_show_only_verified_profiles_and_no_adapter_controls(client, db_session):
+    source = await add_source(db_session)
+    legacy = await NewsSourceRepository(db_session).create({
+        "name": "Historical source", "url": "https://old.example/feed", "kind": "rss",
+        "config": {}, "active": True,
+    })
     await login(client)
-    response = await client.get("/api/admin/news/sources/catalogue")
+    response = await client.get("/api/admin/news/sources")
     assert response.status_code == 200
     assert response.headers["cache-control"] == "no-store"
     entries = response.json()
-    assert len(entries) == 98
-    assert entries[0]["description"] == "Updated catalogue notes"
-    assert any(entry["priority"] is None for entry in entries)
-    feed = next(entry for entry in entries if entry["id"] == "labs-huggingface")
-    assert feed["feedUrl"] == "https://huggingface.co/blog/feed.xml"
-    assert await db_session.scalar(select(func.count()).select_from(NewsSource)) == 0
-    assert await db_session.scalar(select(func.count()).select_from(NewsJob)) == 0
+    assert [entry["slug"] for entry in entries] == [source.slug]
+    assert {"description", "active", "schedule", "next_check_at", "last_success_at", "health"} <= entries[0].keys()
+    assert not {"kind", "config", "priority", "trust_score", "topic_ids", "category_ids", "profile_id"} & entries[0].keys()
+    assert (await client.get(f"/api/admin/news/sources/{legacy.slug}")).status_code == 404
+    assert await db_session.get(NewsSource, legacy.id) is not None
 
 
 def test_news_routes_use_authentication_and_origin_dependencies_and_keep_layers():
@@ -115,89 +108,54 @@ async def test_every_news_mutation_requires_trusted_origin(client, method, path)
     assert response.headers["cache-control"] == "no-store"
 
 
-async def complete_discovery(
-    db_session, job_id, url="https://example.org/feed.xml", kind="rss"
-):
-    jobs = NewsJobRepository(db_session)
-    claimed = await jobs.claim("preview-owner", 120, 3, kinds=["discover"])
-    assert claimed.id == job_id
-    assert await jobs.complete(
-        job_id,
-        "preview-owner",
-        result={"kind": kind, "url": url, "items": [], "warnings": []},
-    )
-
-
-async def test_discovery_is_queued_and_source_requires_matching_completed_preview(
-    client, db_session
-):
+async def test_source_connection_endpoints_are_removed(client):
     await login(client)
-    response = await client.post(
-        "/api/admin/news/sources/discover",
-        json={"url": "https://example.org/", "config": {}},
-        headers=ORIGIN,
-    )
-    assert response.status_code == 202 and response.json()["status"] == "queued"
-    job_id = response.json()["job_id"]
-    data = {
-        "name": "Example",
-        "url": "https://example.org/feed.xml",
-        "kind": "rss",
-        "config": {},
-        "discovery_job_id": job_id,
-    }
-    assert (
-        await client.post("/api/admin/news/sources", json=data, headers=ORIGIN)
-    ).status_code == 409
-    await complete_discovery(db_session, job_id)
-    response = await client.post("/api/admin/news/sources", json=data, headers=ORIGIN)
-    assert response.status_code == 201, response.text
-    source_slug = response.json()["slug"]
-    response = await client.patch(
-        f"/api/admin/news/sources/{source_slug}", json={"active": False}, headers=ORIGIN
-    )
-    assert response.status_code == 200 and response.json()["active"] is False
-    assert (
-        await client.patch(
-            f"/api/admin/news/sources/{source_slug}",
-            json={"url": "https://example.org/other"},
-            headers=ORIGIN,
-        )
-    ).status_code == 409
-    assert (
-        await client.patch(
-            f"/api/admin/news/sources/{source_slug}",
-            json={"config": {"item_selector": "article"}, "discovery_job_id": job_id},
-            headers=ORIGIN,
-        )
-    ).status_code == 409
-    assert await db_session.scalar(select(func.count()).select_from(NewsSource)) == 1
+    assert (await client.post("/api/admin/news/sources", json={}, headers=ORIGIN)).status_code == 405
+    assert (await client.post("/api/admin/news/sources/discover", json={}, headers=ORIGIN)).status_code == 405
+    assert (await client.get("/api/admin/news/sources/catalogue")).status_code == 404
 
 
-async def test_matching_preview_allows_changed_source_configuration(client, db_session):
+async def test_source_preferences_accept_only_enablement_and_valid_calendar(client, db_session):
     source = await add_source(db_session)
-    source_slug = source.slug
     await login(client)
-    config = {"item_selector": "article", "title_selector": "h2", "link_selector": "a"}
-    response = await client.post(
-        "/api/admin/news/sources/discover",
-        json={"url": "https://example.org/posts", "kind": "html", "config": config},
-        headers=ORIGIN,
-    )
-    job_id = response.json()["job_id"]
-    await complete_discovery(db_session, job_id, "https://example.org/posts", "html")
+    schedule = {"mode": "weekly", "times": ["20:00", "08:00"], "weekdays": [5, 0]}
     response = await client.patch(
-        f"/api/admin/news/sources/{source_slug}",
-        json={
-            "url": "https://example.org/posts",
-            "kind": "html",
-            "config": config,
-            "discovery_job_id": job_id,
-        },
-        headers=ORIGIN,
+        f"/api/admin/news/sources/{source.slug}", json={"active": False, "schedule": schedule}, headers=ORIGIN,
     )
     assert response.status_code == 200, response.text
-    assert response.json()["kind"] == "html" and response.json()["config"] == config
+    assert response.json()["active"] is False
+    assert response.json()["next_check_at"] is None
+    assert response.json()["schedule"] == {"mode": "weekly", "times": ["08:00", "20:00"], "weekdays": [0, 5]}
+    enabled = await client.patch(f"/api/admin/news/sources/{source.slug}", json={"active": True}, headers=ORIGIN)
+    assert enabled.status_code == 200
+    assert enabled.json()["next_check_at"] is not None
+    for patch in (
+        {"name": "Replacement"}, {"url": "https://other.example/feed"}, {"kind": "html"},
+        {"config": {}}, {"priority": 90}, {"trust_score": 90}, {"topic_ids": []},
+        {"interval_hours": 6}, {"active": None}, {"schedule": None},
+        {"schedule": {"mode": "daily", "times": []}},
+        {"schedule": {"mode": "daily", "times": ["08:00", "08:00"]}},
+        {"schedule": {"mode": "daily", "times": ["8:00"]}},
+        {"schedule": {"mode": "daily", "times": ["08:00"], "timezone": "UTC"}},
+        {"schedule": {"mode": "weekly", "times": ["08:00"], "weekdays": []}},
+        {"schedule": {"mode": "weekly", "times": ["08:00"], "weekdays": [0, 0]}},
+        {"schedule": {"mode": "weekly", "times": ["08:00"], "weekdays": [7]}},
+        {"schedule": {"mode": "interval_days", "times": ["08:00"], "every_days": 0, "start_date": "2026-10-15"}},
+        {"schedule": {"mode": "interval_days", "times": ["08:00"], "every_days": 366, "start_date": "2026-10-15"}},
+    ):
+        invalid = await client.patch(f"/api/admin/news/sources/{source.slug}", json=patch, headers=ORIGIN)
+        assert invalid.status_code == 422, (patch, invalid.text)
+
+
+async def test_manual_collection_can_check_an_inactive_verified_source(client, db_session):
+    source = await add_source(db_session)
+    await NewsSourceRepository(db_session).update_preferences(source.id, {"active": False})
+    await login(client)
+    response = await client.post("/api/admin/news/jobs/collect", json={"source_slug": source.slug}, headers=ORIGIN)
+    assert response.status_code == 202
+    job = await NewsJobRepository(db_session).get(response.json()["job_id"])
+    assert job.source_id == source.id
+    assert "scheduled_slot" not in job.payload
 
 
 async def test_catalog_validation_and_conflicts_map_to_safe_statuses(client):
@@ -223,7 +181,7 @@ async def test_catalog_validation_and_conflicts_map_to_safe_statuses(client):
     assert invalid.status_code == 422
 
 
-async def test_settings_validate_timezone_schedule_weights_and_hide_credentials(client):
+async def test_settings_validate_policy_weights_and_hide_credentials(client):
     await login(client)
     response = await client.get("/api/admin/news/settings")
     assert response.status_code == 200
@@ -251,15 +209,13 @@ async def test_settings_validate_timezone_schedule_weights_and_hide_credentials(
         ).status_code == 422
     response = await client.patch(
         "/api/admin/news/settings",
-        json={"enabled": False, "schedule": ["20:00", "08:00", "14:00"]},
+        json={"enabled": False},
         headers=ORIGIN,
     )
     assert response.status_code == 200
-    assert response.json()["enabled"] is False and response.json()["schedule"] == [
-        "08:00",
-        "14:00",
-        "20:00",
-    ]
+    assert response.json()["enabled"] is False
+    assert not {"timezone", "schedule"} & response.json().keys()
+
 
 
 async def test_publication_plan_preserves_material_data_without_duplicate_membership(

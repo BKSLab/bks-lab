@@ -10,10 +10,11 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from scripts import audit_news_catalogue
-from scripts.audit_news_catalogue import audit_targets, collection_result, compare_collections, read_catalogue
+from scripts.audit_news_catalogue import audit_targets, collection_result, compare_collections, read_catalogue, report_url
 from src.clients.news_http import SafeNewsHttpClient
 from src.clients.news_sources import NewsSourceClient
 from src.exceptions.news_sources import NewsSourceError
+from src.news_sources import SourceProfile
 from src.schemas.news_collection import CollectedItem, CollectionResult, DiscoveryResult
 
 
@@ -259,3 +260,42 @@ def test_repeat_collect_requires_collect(monkeypatch, capsys):
         audit_news_catalogue.main()
     assert error.value.code == 2
     assert "--repeat-collect requires --collect" in capsys.readouterr().err
+
+
+async def test_curated_audit_uses_only_registered_profile_and_verifies_article_bodies(mocked_audit, monkeypatch):
+    source, args, _ = mocked_audit
+    args.profiles = True
+    args.verify_articles = True
+    profile = SourceProfile(
+        "example", "example", "Example", "Publisher", "https://example.org/",
+        "https://example.org/feed", "rss", article_selectors=(".body",),
+    )
+    monkeypatch.setattr(audit_news_catalogue, "get_source_profiles", lambda: (profile,))
+    source.fetch_profile = AsyncMock(spec=NewsSourceClient.fetch_profile, return_value=CollectionResult([publication()]))
+    source.refetch = AsyncMock(spec=NewsSourceClient.refetch, return_value=CollectionResult([publication()]))
+
+    report = await audit_news_catalogue.audit(args, [])
+
+    source.discover.assert_not_awaited()
+    source.fetch.assert_not_awaited()
+    assert source.fetch_profile.await_count == source.refetch.await_count == 2
+    assert all(call.args == ("example",) for call in source.fetch_profile.await_args_list)
+    assert all(call.kwargs["profile_id"] == "example" for call in source.refetch.await_args_list)
+    row = report["results"][0]
+    assert report["curated_profiles"] == 1
+    assert row["collection"]["status"] == row["repeat_collection"]["status"] == "passed"
+    assert row["comparison"]["unchanged"] == 1
+
+
+def test_identical_article_text_on_distinct_urls_is_reported_as_degraded():
+    result = collection_result(CollectionResult([publication("one"), publication("two")]))
+    assert result["status"] == "degraded"
+    assert result["duplicate_text_urls"] == [["https://example.org/one", "https://example.org/two"]]
+    assert result["warnings"]
+
+
+def test_report_redacts_authorization_redirects_and_preserves_feed_options():
+    url = report_url("https://login.example.org/callback?state=temporary&code=one-time&fl=ru&access_token=hidden")
+    assert "temporary" not in url and "one-time" not in url and "hidden" not in url
+    assert "fl=ru" in url
+    assert report_url(None) is None

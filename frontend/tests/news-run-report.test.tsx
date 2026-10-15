@@ -9,7 +9,6 @@ vi.mock("@/components/admin/AdminSessionRefresh", () => ({ AdminSessionRefresh: 
 
 import AdminLayout from "@/app/(admin)/layout";
 import NewsJobPage from "@/app/(admin)/admin/news/jobs/[slug]/page";
-import NewsSourcePage from "@/app/(admin)/admin/news/sources/[slug]/page";
 import NewsRunsPage from "@/app/(admin)/admin/news/runs/page";
 import { NewsRunReport } from "@/components/admin/news/NewsRunReport";
 import { adminFetch, requireAdmin } from "@/lib/admin-api";
@@ -142,19 +141,15 @@ describe("collection run report", () => {
     expect(adminFetch).toHaveBeenCalledWith(`/news/jobs/${newsCollectJob.slug}/items?source_slug=${newsSource.slug}&outcome=skipped&warnings_only=true&page=3&page_size=20`);
   });
 
-  it("shows source settings and history links using stable slugs", async () => {
-    const source = await NewsSourcePage({ params: Promise.resolve({ slug: newsSource.slug }) });
-    expect(adminFetch).toHaveBeenCalledWith(`/news/sources/${newsSource.slug}`);
-    expect(source).toBeTruthy();
-    render(<AdminLayout>{await NewsRunsPage({ searchParams: Promise.resolve({ source_slug: newsSource.slug }) })}</AdminLayout>);
-    expect(adminFetch).toHaveBeenCalledWith(`/news/runs?source_slug=${newsSource.slug}&page=1&page_size=20`);
-    expect(screen.getByRole("link", { name: /^Отчёт сбора/ }).getAttribute("href")).toBe(`/admin/news/jobs/${newsCollectJob.slug}`);
-    expect(screen.getByRole("link", { name: newsSource.name }).getAttribute("href")).toBe(`/admin/news/sources/${newsSource.slug}`);
+  it("links report sources to their row on the unified sources screen", async () => {
+    render(<AdminLayout>{await NewsRunsPage({ searchParams: Promise.resolve({}) })}</AdminLayout>);
+    const link = screen.getByRole("link", { name: newsSource.name });
+    expect(link.getAttribute("href")).toBe(`/admin/news/sources#${newsSource.slug}`);
+    expect(link.tagName).toBe("A");
   });
 
   it.each(["9", "0", "../jobs", "two/slugs", "", "bad_slug"])("rejects an invalid slug %s without a numeric fallback", async slug => {
     await expect(NewsJobPage({ params: Promise.resolve({ slug }), searchParams: Promise.resolve({}) })).rejects.toThrow("NOT_FOUND");
-    await expect(NewsSourcePage({ params: Promise.resolve({ slug }) })).rejects.toThrow("NOT_FOUND");
     expect(adminFetch).not.toHaveBeenCalled();
   });
 

@@ -4,22 +4,21 @@ import re
 from datetime import datetime
 from typing import Annotated, Literal
 from urllib.parse import urlsplit
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import (
     AfterValidator,
     BaseModel,
     ConfigDict,
     Field,
-    field_validator,
     model_validator,
 )
+
+from src.schemas.news_source_schedule import SourceSchedule
 
 NewsFormat = Literal["longread_candidate", "short_news_candidate"]
 NewsDecision = Literal["in_work", "deferred", "rejected"]
 NewsStatus = Literal["pending_analysis", "analyzed"]
 NewsKind = Literal["rss", "html"]
-PositiveID = Annotated[int, Field(ge=1)]
 def validate_news_slug(value: str) -> str:
     """Reject numeric record IDs as public news addresses."""
     if re.search(r"[a-z]", value) is None:
@@ -63,139 +62,29 @@ class NewsPatch(NewsRequest):
         return value
 
 
-class DiscoverRequest(NewsRequest):
-    url: SourceURL = Field(
-        description="Public feed or listing URL.",
-        examples=["https://example.org/feed.xml"],
-    )
-    kind: NewsKind | None = Field(
-        default=None, description="Optional adapter hint.", examples=["rss"]
-    )
-    config: dict[str, str] = Field(
-        default_factory=dict, description="HTML selectors.", examples=[{}]
-    )
-
-    @field_validator("config")
-    @classmethod
-    def validate_config(cls, value: dict[str, str]) -> dict[str, str]:
-        keys = {
-            "item_selector",
-            "title_selector",
-            "link_selector",
-            "date_selector",
-            "content_selector",
-        }
-        if set(value) - keys or any(
-            not selector.strip() or len(selector) > 500 for selector in value.values()
-        ):
-            raise ValueError("Only nonempty HTML selector fields are supported")
-        return {key: selector.strip() for key, selector in value.items()}
-
-
-class SourceCreate(DiscoverRequest):
-    kind: NewsKind = Field(
-        description="Successfully discovered source kind.", examples=["rss"]
-    )
-    name: str = Field(
-        min_length=1,
-        max_length=200,
-        description="Source display name.",
-        examples=["Example blog"],
-    )
-    active: bool = Field(
-        default=True, description="Enable scheduled collection.", examples=[True]
-    )
-    priority: int = Field(
-        default=50, ge=0, le=100, description="Editorial priority.", examples=[50]
-    )
-    trust_score: int = Field(
-        default=50, ge=0, le=100, description="Editorial source trust.", examples=[70]
-    )
-    vendor_affiliated: bool = Field(
-        default=False, description="Source has commercial interests.", examples=[False]
-    )
-    interval_hours: int = Field(
-        default=6,
-        ge=1,
-        le=720,
-        description="Minimum interval between fetches.",
-        examples=[6],
-    )
-    topic_ids: list[PositiveID] = Field(
-        default_factory=list,
-        max_length=50,
-        description="Existing topic IDs.",
-        examples=[[1]],
-    )
-    category_ids: list[PositiveID] = Field(
-        default_factory=list,
-        max_length=50,
-        description="Existing category IDs.",
-        examples=[[1]],
-    )
-    discovery_job_id: PositiveID = Field(
-        description="Successful matching discovery job.", examples=[1]
-    )
-
-
 class SourcePatch(NewsPatch):
-    name: str | None = Field(
-        default=None, min_length=1, max_length=200, description="Source display name."
+    active: bool | None = Field(
+        default=None, description="Enable automatic collection for this source.", examples=[True]
     )
-    url: SourceURL | None = Field(default=None, description="Checked replacement URL.")
-    kind: NewsKind | None = Field(
-        default=None, description="Checked replacement adapter."
+    schedule: SourceSchedule | None = Field(
+        default=None, description="Collection calendar in Europe/Samara.",
+        examples=[{"mode": "daily", "times": ["08:00", "20:00"]}],
     )
-    config: dict[str, str] | None = Field(
-        default=None, description="Checked replacement selectors."
-    )
-    active: bool | None = Field(default=None, description="Enable collection.")
-    priority: int | None = Field(
-        default=None, ge=0, le=100, description="Editorial priority."
-    )
-    trust_score: int | None = Field(
-        default=None, ge=0, le=100, description="Editorial trust."
-    )
-    vendor_affiliated: bool | None = Field(
-        default=None, description="Commercial affiliation."
-    )
-    interval_hours: int | None = Field(
-        default=None, ge=1, le=720, description="Minimum fetch interval."
-    )
-    topic_ids: list[PositiveID] | None = Field(
-        default=None, max_length=50, description="Replacement topic IDs."
-    )
-    category_ids: list[PositiveID] | None = Field(
-        default=None, max_length=50, description="Replacement category IDs."
-    )
-    discovery_job_id: PositiveID | None = Field(
-        default=None, description="Matching discovery required for URL/config changes."
-    )
-
-    @field_validator("config")
-    @classmethod
-    def validate_config(cls, value: dict[str, str] | None) -> dict[str, str] | None:
-        return DiscoverRequest.validate_config(value) if value is not None else None
 
 
 class SourceRow(BaseModel):
-    id: int
-    slug: str = Field(description="Stable readable source address.", examples=["primer-bloga"])
-    name: str
-    url: str
-    kind: NewsKind
-    config: dict[str, str]
-    active: bool
-    priority: int
-    trust_score: int
-    vendor_affiliated: bool
-    interval_hours: int
-    topic_ids: list[int]
-    category_ids: list[int]
-    last_success_at: datetime | None
-    last_error: str | None
-    last_new_count: int
-    health: str
+    id: int = Field(description="Internal source identity.", examples=[1])
+    slug: str = Field(description="Stable readable source address.", examples=["labs-huggingface"])
+    name: str = Field(description="Source display name.", examples=["Hugging Face Blog"])
+    description: str = Field(description="Editorial source description.", examples=["AI engineering and research."])
+    url: str = Field(description="Source collection URL.", examples=["https://huggingface.co/blog/feed.xml"])
+    active: bool = Field(description="Automatic collection is enabled.", examples=[False])
+    schedule: SourceSchedule = Field(description="Collection calendar in Europe/Samara.")
+    next_check_at: datetime | None = Field(description="Next automatic collection start, or null when paused.")
+    last_success_at: datetime | None = Field(description="Last successful collection.")
+    last_error: str | None = Field(description="Safe latest collection error.")
+    last_new_count: int = Field(description="New materials in the latest collection.", examples=[0])
+    health: str = Field(description="Latest collection health.", examples=["unknown"])
 
 
 class CatalogCreate(NewsRequest):
@@ -254,15 +143,6 @@ class ScoreWeights(NewsRequest):
 
 class NewsSettingsData(NewsRequest):
     enabled: bool = Field(default=True, description="Enable scheduled collection.")
-    timezone: str = Field(
-        default="Europe/Samara", max_length=100, description="IANA schedule time zone."
-    )
-    schedule: list[str] = Field(
-        default_factory=lambda: ["08:00", "14:00", "20:00"],
-        min_length=3,
-        max_length=3,
-        description="Three distinct daily HH:MM times.",
-    )
     editorial_policy: str = Field(
         default="BKS Lab: практическая AI-разработка, архитектура, управление IT-проектами, доступность и критический анализ влияния технологий.",
         min_length=1,
@@ -308,29 +188,8 @@ class NewsSettingsData(NewsRequest):
         default=180, ge=1, le=3650, description="Superseded history retention."
     )
 
-    @field_validator("timezone")
-    @classmethod
-    def validate_timezone(cls, value: str) -> str:
-        try:
-            ZoneInfo(value)
-        except (ZoneInfoNotFoundError, ValueError) as error:
-            raise ValueError("Unknown IANA timezone") from error
-        return value
-
-    @field_validator("schedule")
-    @classmethod
-    def validate_schedule(cls, value: list[str]) -> list[str]:
-        if len(set(value)) != 3 or any(
-            re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", slot) is None for slot in value
-        ):
-            raise ValueError("Provide three distinct HH:MM times")
-        return sorted(value)
-
-
 class SettingsPatch(NewsPatch):
     enabled: bool | None = None
-    timezone: str | None = Field(default=None, max_length=100)
-    schedule: list[str] | None = Field(default=None, min_length=3, max_length=3)
     editorial_policy: str | None = Field(default=None, min_length=1, max_length=12000)
     exclusions: str | None = Field(default=None, max_length=6000)
     news_weights: ScoreWeights | None = None

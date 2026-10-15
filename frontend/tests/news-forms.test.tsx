@@ -5,141 +5,16 @@ import { axe } from "vitest-axe";
 const { router, fetchMock } = vi.hoisted(() => ({ router: { push: vi.fn(), replace: vi.fn(), refresh: vi.fn() }, fetchMock: vi.fn() }));
 vi.mock("next/navigation", () => ({ useRouter: () => router }));
 
-import { NewsSourceForm } from "@/components/admin/news/NewsSourceForm";
-import { NewsSourceToggle } from "@/components/admin/news/NewsSourceToggle";
 import { NewsDecisionForm } from "@/components/admin/news/NewsDecisionForm";
 import { NewsJobLauncher } from "@/components/admin/news/NewsJobLauncher";
 import { NewsJobProgress } from "@/components/admin/news/NewsJobProgress";
 import { NewsSettingsForm } from "@/components/admin/news/NewsSettingsForm";
 import { NewsTaxonomyManager } from "@/components/admin/news/NewsTaxonomyManager";
-import { sourceCatalogue } from "./news-catalogue-fixtures";
-import { newsCategory, newsDecision, newsJob, newsSettings, newsSource, newsTopic } from "./news-fixtures";
+import { newsDecision, newsJob, newsSettings, newsSource, newsTopic } from "./news-fixtures";
 
 beforeEach(() => { fetchMock.mockReset(); Object.values(router).forEach(fn => fn.mockReset()); vi.stubGlobal("fetch", fetchMock); });
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
-
-function fillSource() {
-  fireEvent.change(screen.getByLabelText("Название (обязательно)"), { target: { value: "Технический блог" } });
-  fireEvent.change(screen.getByLabelText("URL источника (обязательно)"), { target: { value: "https://example.org/" } });
-}
-
-describe("source discovery and saving", () => {
-  it("has labeled inputs and blocks saving an untested source with a focused explanation", async () => {
-    const { container } = render(<NewsSourceForm catalogue={sourceCatalogue} topics={[newsTopic]} categories={[newsCategory]} />);
-    fillSource();
-    fireEvent.click(screen.getByRole("button", { name: "Сохранить источник" }));
-    const error = await screen.findByRole("alert");
-    expect(error.textContent).toContain("Сначала проверьте");
-    expect(document.activeElement).toBe(error);
-    expect(fetchMock).not.toHaveBeenCalled();
-    expect((await axe(container)).violations).toEqual([]);
-  });
-
-  it("queues discovery, previews the resolved feed, and saves its job proof with editor settings", async () => {
-    fetchMock.mockResolvedValueOnce(json({ job_id: 9, job_slug: newsJob.slug, status: "queued" }, 202)).mockResolvedValueOnce(json(newsJob)).mockResolvedValueOnce(json(newsSource));
-    render(<NewsSourceForm catalogue={sourceCatalogue} topics={[newsTopic]} categories={[newsCategory]} />);
-    fillSource();
-    fireEvent.click(screen.getByLabelText("AI Engineering"));
-    fireEvent.click(screen.getByRole("button", { name: "Проверить источник" }));
-    await screen.findByRole("link", { name: "Новая публикация (в новой вкладке)" });
-    expect(fetchMock.mock.calls[0][0]).toBe("/api/admin/news/sources/discover");
-    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ url: "https://example.org/", config: {} });
-    expect(fetchMock.mock.calls[1][0]).toBe(`/api/admin/news/jobs/${newsJob.slug}`);
-    expect((screen.getByLabelText("URL источника (обязательно)") as HTMLInputElement).value).toBe("https://example.org/feed.xml");
-    fireEvent.click(screen.getByRole("button", { name: "Сохранить источник" }));
-    await waitFor(() => expect(router.push).toHaveBeenCalledWith("/admin/news/sources"));
-    const [url, options] = fetchMock.mock.calls[2];
-    expect(url).toBe("/api/admin/news/sources");
-    expect(options.credentials).toBe("same-origin");
-    expect(options.cache).toBe("no-store");
-    expect(JSON.parse(options.body)).toMatchObject({ discovery_job_id: 9, url: "https://example.org/feed.xml", kind: "rss", active: false, topic_ids: [1], trust_score: 50, interval_hours: 6 });
-  });
-
-  it("invalidates proof after editing the discovered URL", async () => {
-    fetchMock.mockResolvedValueOnce(json({ job_id: 9, job_slug: newsJob.slug, status: "queued" }, 202)).mockResolvedValueOnce(json(newsJob));
-    render(<NewsSourceForm catalogue={sourceCatalogue} topics={[]} categories={[]} />);
-    fillSource();
-    fireEvent.click(screen.getByRole("button", { name: "Проверить источник" }));
-    await screen.findByRole("link", { name: "Новая публикация (в новой вкладке)" });
-    fireEvent.change(screen.getByLabelText("URL источника (обязательно)"), { target: { value: "https://example.net/feed" } });
-    fireEvent.click(screen.getByRole("button", { name: "Сохранить источник" }));
-    expect((await screen.findByRole("alert")).textContent).toContain("Сначала проверьте");
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-  });
-
-  it("allows editing metadata of an already verified source without another discovery", async () => {
-    fetchMock.mockResolvedValue(json(newsSource));
-    render(<NewsSourceForm catalogue={sourceCatalogue} source={newsSource} topics={[newsTopic]} categories={[newsCategory]} />);
-    fireEvent.change(screen.getByLabelText("Название (обязательно)"), { target: { value: "Новое название" } });
-    fireEvent.click(screen.getByRole("button", { name: "Сохранить источник" }));
-    await waitFor(() => expect(router.push).toHaveBeenCalledWith("/admin/news/sources"));
-    expect(fetchMock).toHaveBeenCalledOnce();
-    expect(fetchMock.mock.calls[0][0]).toBe(`/api/admin/news/sources/${newsSource.slug}`);
-    expect(fetchMock.mock.calls[0][1].method).toBe("PATCH");
-    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).not.toHaveProperty("discovery_job_id");
-  });
-
-  it("requires rechecking HTML after selectors change", async () => {
-    const htmlJob = { ...newsJob, result: { ...newsJob.result, kind: "html", url: "https://example.org/" } };
-    fetchMock.mockResolvedValueOnce(json({ job_id: 9, job_slug: newsJob.slug, status: "queued" }, 202)).mockResolvedValueOnce(json(htmlJob));
-    render(<NewsSourceForm catalogue={sourceCatalogue} topics={[]} categories={[]} />);
-    fillSource();
-    fireEvent.change(screen.getByLabelText("Способ получения"), { target: { value: "html" } });
-    fireEvent.change(screen.getByLabelText("Блок публикации"), { target: { value: " article " } });
-    fireEvent.change(screen.getByLabelText("Заголовок"), { target: { value: "h2" } });
-    fireEvent.click(screen.getByRole("button", { name: "Проверить источник" }));
-    await screen.findByRole("link", { name: "Новая публикация (в новой вкладке)" });
-    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ url: "https://example.org/", kind: "html", config: { item_selector: "article", title_selector: "h2" } });
-    fireEvent.change(screen.getByLabelText("Блок публикации"), { target: { value: ".post" } });
-    fireEvent.click(screen.getByRole("button", { name: "Сохранить источник" }));
-    expect((await screen.findByRole("alert")).textContent).toContain("Сначала проверьте");
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-  });
-
-  it("toggles a source by slug and keeps its numeric ID out of the URL", async () => {
-    fetchMock.mockResolvedValue(json({ ...newsSource, active: true }));
-    render(<NewsSourceToggle source={newsSource} />);
-    fireEvent.click(screen.getByRole("button", { name: `Включить источник ${newsSource.name}` }));
-    await screen.findByText("Источник включён.");
-    expect(fetchMock.mock.calls[0][0]).toBe(`/api/admin/news/sources/${newsSource.slug}`);
-    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ active: true });
-  });
-
-  it("only prefills a catalogue suggestion, never auto-enables or saves it", () => {
-    render(<NewsSourceForm catalogue={sourceCatalogue} topics={[]} categories={[]} />);
-    fireEvent.change(screen.getByLabelText("Подставить адрес из каталога"), { target: { value: "eng-simon" } });
-    expect((screen.getByLabelText("Название (обязательно)") as HTMLInputElement).value).toBe("Simon Willison");
-    expect((screen.getByLabelText("URL источника (обязательно)") as HTMLInputElement).value).toBe("https://simonwillison.net/atom/entries/");
-    expect((screen.getByLabelText("Включить регулярный сбор") as HTMLInputElement).checked).toBe(false);
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-
-  it("prefills a catalogue deep link but still requires successful discovery", async () => {
-    render(<NewsSourceForm catalogue={sourceCatalogue} topics={[]} categories={[]} catalogueEntry={sourceCatalogue.find(entry => entry.id === "ru-tbank")} />);
-    expect((screen.getByLabelText("Название (обязательно)") as HTMLInputElement).value).toBe("Т-Банк AI Research");
-    expect((screen.getByLabelText("URL источника (обязательно)") as HTMLInputElement).value).toBe("https://research.tbank.ru/");
-    expect((screen.getByLabelText("Источник связан с поставщиком продукта") as HTMLInputElement).checked).toBe(true);
-    expect((screen.getByLabelText("Включить регулярный сбор") as HTMLInputElement).checked).toBe(false);
-    fireEvent.click(screen.getByRole("button", { name: "Сохранить источник" }));
-    expect((await screen.findByRole("alert")).textContent).toContain("Сначала проверьте");
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-
-  it("clears the previous discovery when another catalogue entry is selected", async () => {
-    fetchMock.mockResolvedValueOnce(json({ job_id: 9, job_slug: newsJob.slug, status: "queued" }, 202)).mockResolvedValueOnce(json(newsJob));
-    render(<NewsSourceForm catalogue={sourceCatalogue} topics={[]} categories={[]} />);
-    fillSource();
-    fireEvent.click(screen.getByRole("button", { name: "Проверить источник" }));
-    await screen.findByRole("link", { name: "Новая публикация (в новой вкладке)" });
-    fireEvent.change(screen.getByLabelText("Подставить адрес из каталога"), { target: { value: "ru-tbank" } });
-    expect(screen.queryByRole("link", { name: "Новая публикация (в новой вкладке)" })).toBeNull();
-    expect(screen.queryByRole("link", { name: "Открыть отчёт задания" })).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Сохранить источник" }));
-    expect((await screen.findByRole("alert")).textContent).toContain("Сначала проверьте");
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-  });
-});
 
 describe("editorial actions and jobs", () => {
   it("saves decision, format and comment using the session identity", async () => {
@@ -161,7 +36,7 @@ describe("editorial actions and jobs", () => {
     fireEvent.click(screen.getByRole("button", { name: "Отложить" }));
     const error = await screen.findByRole("alert");
     expect(error.textContent).not.toContain("private-upstream-error");
-    expect(document.activeElement).toBe(error);
+    await waitFor(() => expect(document.activeElement).toBe(error));
     expect((screen.getByRole("button", { name: "Отложить" }) as HTMLButtonElement).disabled).toBe(false);
     if (status === 401) expect(router.replace).toHaveBeenCalledWith("/admin/login");
   });
@@ -291,14 +166,17 @@ describe("editorial settings and taxonomy", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("saves policy and schedule without provider secrets or financial settings", async () => {
+  it("saves policy without obsolete global scheduling fields or provider secrets", async () => {
     fetchMock.mockResolvedValue(json(newsSettings));
     const { container } = render(<NewsSettingsForm settings={newsSettings} />);
     fireEvent.click(screen.getByRole("button", { name: "Сохранить настройки" }));
     await waitFor(() => expect(router.refresh).toHaveBeenCalledOnce());
     const editable = Object.fromEntries(Object.entries(newsSettings).filter(([key]) => !key.startsWith("llm_")));
     expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual(editable);
-    expect(container.querySelector('input[type="password"]')).toBeNull();
+    expect(container.querySelector('input[type="password"], input[type="time"]')).toBeNull();
+    expect(screen.queryByLabelText(/Часовой пояс/)).toBeNull();
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).not.toHaveProperty("schedule");
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).not.toHaveProperty("timezone");
     expect((await axe(container)).violations).toEqual([]);
   });
 

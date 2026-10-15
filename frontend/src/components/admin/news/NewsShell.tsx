@@ -6,7 +6,6 @@ const sections = [
   { key: "items", href: "/admin/news/items", label: "Подборки" },
   { key: "plan", href: "/admin/news/plan", label: "План публикаций" },
   { key: "sources", href: "/admin/news/sources", label: "Источники" },
-  { key: "catalogue", href: "/admin/news/sources/catalogue", label: "Каталог" },
   { key: "topics", href: "/admin/news/topics", label: "Темы и рубрики" },
   { key: "runs", href: "/admin/news/runs", label: "Запуски" },
   { key: "settings", href: "/admin/news/settings", label: "Настройки" },

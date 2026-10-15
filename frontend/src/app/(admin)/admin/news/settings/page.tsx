@@ -10,5 +10,5 @@ export const metadata: Metadata = { title: "Настройки редакцио�
 export default async function NewsSettingsPage() {
   const user = await requireAdmin();
   const settings = await adminFetch<NewsSettings>("/news/settings");
-  return <NewsShell username={user.username} current="settings" title="Настройки анализа" description="Редакционная политика, расписание сбора и критерии рейтинга."><NewsSettingsForm settings={settings} /></NewsShell>;
+  return <NewsShell username={user.username} current="settings" title="Настройки анализа" description="Редакционная политика, сбор публикаций и критерии рейтинга."><NewsSettingsForm settings={settings} /></NewsShell>;
 }

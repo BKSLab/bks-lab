@@ -8,13 +8,17 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import joinedload
 
 from src.core.news_slugs import JOB_SLUG_MAX, job_slug_base, readable_slug
+from src.core.news_source_schedule import (
+    SOURCE_SCHEDULE_LOCK, latest_scheduled_check, next_scheduled_check,
+)
 from src.db.models.news_jobs import NewsJob, NewsSourceRun
 from src.db.models.news_items import NewsItem
 from src.db.models.news_sources import NewsSource
+from src.db.models.news_settings import NewsSetting
 from src.repositories.news_base import NewsRepository
 
 QUEUE_LOCK = 721409081
-SCHEDULE_LOCK = 721409082
+SCHEDULE_LOCK = SOURCE_SCHEDULE_LOCK
 JOB_SLUG_LOCK = 721409084
 
 
@@ -185,32 +189,66 @@ class NewsJobRepository(NewsRepository):
             await self.db_session.commit()
             return row
 
-    async def enqueue_scheduled(self, slot_key: str) -> NewsJob | None:
-        """Serialize schedulers and persist a unique schedule occurrence."""
+    async def enqueue_due_sources(self, *, now: datetime | None = None) -> list[NewsJob]:
+        """Atomically queue one latest due start per verified, enabled source.
+
+        A persistent next start advances beyond now in the same transaction as
+        insertion. Restarts coalesce missed starts; concurrent schedulers share
+        the source locks and the unique source/start identity.
+        """
+        now = now or datetime.now(timezone.utc)
         async with self.operation():
             locked = await self.db_session.scalar(
                 text("SELECT pg_try_advisory_xact_lock(:key)"), {"key": SCHEDULE_LOCK}
             )
             if not locked:
                 await self.db_session.rollback()
-                return None
-            created_at = datetime.now(timezone.utc)
-            slug = await self._new_slug("collect", created_at=created_at)
-            row_id = await self.db_session.scalar(
-                insert(NewsJob)
-                .values(
-                    slug=slug,
-                    created_at=created_at,
-                    kind="collect",
-                    payload={"scheduled_slot": slot_key},
-                    dedupe_key=f"scheduled:{slot_key}",
-                )
-                .on_conflict_do_nothing(index_elements=["dedupe_key"])
-                .returning(NewsJob.id)
+                return []
+            settings = await self.db_session.get(NewsSetting, 1)
+            enabled = settings is None or settings.value.get("enabled", True)
+            # Older global starts have no source scope and must not revive the removed calendar.
+            await self.db_session.execute(
+                update(NewsJob).where(
+                    NewsJob.status == "queued", NewsJob.payload.has_key("scheduled_slot"),
+                    NewsJob.source_id.is_(None),
+                ).values(status="cancelled", completed_at=now, error="Global source calendar was replaced")
             )
-            row = await self.db_session.get(NewsJob, row_id) if row_id else None
+            rows = list(await self.db_session.scalars(
+                select(NewsSource).where(
+                    NewsSource.profile_id.is_not(None), NewsSource.active.is_(True),
+                    (NewsSource.next_check_at.is_(None) | (NewsSource.next_check_at <= now)),
+                ).order_by(NewsSource.next_check_at, NewsSource.id)
+                .with_for_update(skip_locked=True).execution_options(populate_existing=True)
+            ))
+            result: list[NewsJob] = []
+            for source in rows:
+                due_at = source.next_check_at
+                source.next_check_at = next_scheduled_check(source.schedule, now)
+                if not enabled or due_at is None:
+                    continue
+                slot = latest_scheduled_check(source.schedule, now)
+                if slot is None or slot < due_at:
+                    continue
+                slot_key = slot.isoformat()
+                await self.db_session.execute(
+                    update(NewsJob).where(
+                        NewsJob.source_id == source.id, NewsJob.status == "queued",
+                        NewsJob.payload.has_key("scheduled_slot"),
+                        NewsJob.dedupe_key != f"scheduled:{source.id}:{slot_key}",
+                    ).values(status="cancelled", completed_at=now, error="Missed source starts were coalesced")
+                )
+                row_id = await self.db_session.scalar(
+                    insert(NewsJob).values(
+                        slug=await self._new_slug("collect", source_id=source.id, created_at=now),
+                        created_at=now, kind="collect", source_id=source.id,
+                        payload={"scheduled_slot": slot_key, "source_schedule": source.schedule},
+                        dedupe_key=f"scheduled:{source.id}:{slot_key}",
+                    ).on_conflict_do_nothing(index_elements=["dedupe_key"]).returning(NewsJob.id)
+                )
+                if row_id is not None:
+                    result.append(await self.db_session.get(NewsJob, row_id))
             await self.db_session.commit()
-            return row
+            return result
 
     async def claim(
         self,
@@ -225,6 +263,20 @@ class NewsJobRepository(NewsRepository):
         async with self.operation():
             await self.db_session.execute(
                 text("SELECT pg_advisory_xact_lock(:key)"), {"key": QUEUE_LOCK}
+            )
+            settings = await self.db_session.get(NewsSetting, 1)
+            registered_source = select(NewsSource.id).where(
+                NewsSource.id == NewsJob.source_id, NewsSource.active.is_(True),
+                NewsSource.profile_id.is_not(None),
+                NewsSource.schedule == NewsJob.payload["source_schedule"],
+            ).exists()
+            obsolete = ~registered_source
+            if settings is not None and not settings.value.get("enabled", True):
+                obsolete = True
+            await self.db_session.execute(
+                update(NewsJob).where(
+                    NewsJob.status == "queued", NewsJob.payload.has_key("scheduled_slot"), obsolete,
+                ).values(status="cancelled", completed_at=func.now(), error="Automatic collection preferences changed")
             )
             kinds = kinds or ["collect", "discover", "analyze"]
             limits = concurrency_limits or {"collect": 1, "discover": 1, "analyze": 1}

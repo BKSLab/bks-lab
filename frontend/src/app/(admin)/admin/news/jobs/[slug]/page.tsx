@@ -27,7 +27,7 @@ export default async function NewsJobPage({ params, searchParams }: { params: Pr
     adminFetch<NewsSource[]>("/news/sources"),
   ]) : null;
   return <NewsShell username={user.username} current="runs" title={newsJobTitle(job)} description={job.kind === "collect" ? "Статус и отчёт обновляются во время сбора. Время указано в UTC." : "Статус обновляется автоматически, пока задание выполняется. Время указано в UTC."}>
-    <div className="news-actions"><Link className="admin-link" prefetch={false} href="/admin/news/runs">К запускам</Link>{job.source_slug && <Link className="admin-link" prefetch={false} href={`/admin/news/sources/${job.source_slug}`}>Открыть источник</Link>}{job.item_id && <Link className="admin-link" prefetch={false} href={`/admin/news/items/${job.item_id}`}>Открыть материал</Link>}</div>
+    <div className="news-actions"><Link className="admin-link" prefetch={false} href="/admin/news/runs">К запускам</Link>{job.source_slug && <a className="admin-link" href={`/admin/news/sources#${job.source_slug}`}>Открыть источник</a>}{job.item_id && <Link className="admin-link" prefetch={false} href={`/admin/news/items/${job.item_id}`}>Открыть материал</Link>}</div>
     <p className="admin-muted">Создано: {adminDate(job.created_at, true)} UTC. Попыток: {job.attempts}.</p>
     {report ? <NewsRunReport key={JSON.stringify([job.slug, filters, page, runsPage])} initialJob={job} initialRuns={report[0]} initialItems={report[1]} sources={report[2]} filters={filters} />
       : <NewsJobProgress key={job.slug} jobSlug={job.slug} initialJob={job} showLink={false} showPreview />}

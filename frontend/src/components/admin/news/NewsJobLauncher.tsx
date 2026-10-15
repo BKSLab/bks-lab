@@ -6,7 +6,7 @@ import type { NewsJobAccepted, NewsSource } from "@/lib/news-api/types";
 import { NewsFeedback, useNewsMutation } from "./NewsFeedback";
 import { NewsJobProgress } from "./NewsJobProgress";
 
-export function NewsJobLauncher({ sources, sourceSlug, itemId }: { sources?: NewsSource[]; sourceSlug?: string; itemId?: number }) {
+export function NewsJobLauncher({ sources, sourceSlug, sourceName, itemId, allActive = false }: { sources?: NewsSource[]; sourceSlug?: string; sourceName?: string; itemId?: number; allActive?: boolean }) {
   const router = useRouter();
   const mutation = useNewsMutation();
   const [jobSlug, setJobSlug] = useState<string | null>(null);
@@ -23,8 +23,8 @@ export function NewsJobLauncher({ sources, sourceSlug, itemId }: { sources?: New
       {sources && <div className="admin-field"><label htmlFor="news-collect-source">Источник для сбора</label><select id="news-collect-source" value={selectedSource} onChange={event => setSelectedSource(event.target.value)} disabled={mutation.pending || running}>
         <option value="">Все активные источники</option>{sources.map(source => <option value={source.slug} key={source.slug}>{source.name}{!source.active ? " (на паузе)" : ""}</option>)}
       </select></div>}
-      <button className="admin-button" type="button" onClick={start} disabled={mutation.pending || running}>
-        {mutation.pending ? "Создаём задание…" : itemId ? "Повторить анализ" : "Проверить сейчас"}
+      <button className="admin-button" type="button" onClick={start} disabled={mutation.pending || running} aria-label={sourceName ? `Проверить сейчас: ${sourceName}` : undefined}>
+        {mutation.pending ? "Создаём задание…" : itemId ? "Повторить анализ" : allActive ? "Проверить все включённые" : "Проверить сейчас"}
       </button>
     </div>
     <NewsFeedback error={mutation.error} />

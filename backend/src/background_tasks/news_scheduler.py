@@ -5,44 +5,22 @@ import logging
 import signal
 from collections.abc import AsyncIterator, Callable, Sequence
 from contextlib import AsyncExitStack, asynccontextmanager, suppress
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any
-from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from apscheduler.triggers.cron import CronTrigger
 
 from src.core.logging import setup_logging
 from src.core.news_settings import NewsSettings
+from src.core.news_source_schedule import SOURCE_TIMEZONE
 from src.core.settings import get_settings
 from src.services.news_pipeline import NewsPipeline, NewsRepositories
 
 logger = logging.getLogger(__name__)
 
 
-def latest_scheduled_slot(
-    now: datetime, schedule: Sequence[str], timezone_name: str,
-) -> str:
-    """Identify the latest wall-clock slot, including one coalesced missed run.
-
-    A local date/time key intentionally identifies both folds of a DST fallback
-    as the same daily start. A nonexistent spring-forward time is caught up by
-    the settings refresh after the gap.
-    """
-    local_now = now.astimezone(ZoneInfo(timezone_name))
-    date = local_now.date()
-    current_time = local_now.strftime("%H:%M")
-    due = [value for value in sorted(schedule) if value <= current_time]
-    if due:
-        slot = due[-1]
-    else:
-        date -= timedelta(days=1)
-        slot = max(schedule)
-    return f"{timezone_name}:{date.isoformat()}:{slot}"
-
-
 class NewsScheduler:
-    """Manage daily triggers and queue workers without holding DB resources."""
+    """Tick individual source calendars and manage queue workers without holding DB resources."""
 
     def __init__(
         self,
@@ -58,7 +36,6 @@ class NewsScheduler:
         self._utc_now = utc_now
         self._stop = asyncio.Event()
         self._workers: list[asyncio.Task[None]] = []
-        self._signature: tuple[Any, ...] | None = None
         self._refresh_lock = asyncio.Lock()
 
     async def start(self) -> None:
@@ -85,29 +62,12 @@ class NewsScheduler:
         logger.info("News scheduler started; AI analysis configured=%s", self._config.llm_configured)
 
     async def refresh(self) -> None:
-        """Reconcile DB policy, catch up one missed slot and renew local health."""
+        """Check source calendars, coalesce missed starts and renew local health."""
         async with self._refresh_lock:
             policy = await self._pipeline.get_settings()
-            signature = (policy["enabled"], policy["timezone"], tuple(policy["schedule"]))
-            if signature != self._signature:
-                for job in self._scheduler.get_jobs():
-                    if job.id.startswith("news-daily-"):
-                        self._scheduler.remove_job(job.id)
-                if policy["enabled"]:
-                    for index, slot in enumerate(policy["schedule"]):
-                        hour, minute = map(int, slot.split(":"))
-                        self._scheduler.add_job(
-                            self.refresh,
-                            CronTrigger(hour=hour, minute=minute, timezone=policy["timezone"]),
-                            id=f"news-daily-{index}", max_instances=1, coalesce=True,
-                            misfire_grace_time=None,
-                        )
-                self._signature = signature
             await self._pipeline.recover()
             if policy["enabled"]:
-                await self._pipeline.enqueue_scheduled(latest_scheduled_slot(
-                    self._utc_now(), policy["schedule"], policy["timezone"],
-                ))
+                await self._pipeline.enqueue_scheduled()
                 await self._pipeline.enqueue_pending(policy)
             await asyncio.to_thread(self._config.health_file.touch)
 
@@ -205,7 +165,7 @@ async def run_scheduler() -> None:
             )
             runner = NewsScheduler(
                 pipeline=pipeline,
-                scheduler=AsyncIOScheduler(timezone=config.timezone),
+                scheduler=AsyncIOScheduler(timezone=SOURCE_TIMEZONE),
                 config=config, utc_now=lambda: datetime.now(timezone.utc),
             )
             try:

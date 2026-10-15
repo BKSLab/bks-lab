@@ -32,10 +32,37 @@ async def test_migrations_upgrade_check_downgrade_and_reupgrade(postgres_url):
             cwd=Path(__file__).resolve().parents[2], env=environment,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
         )
-        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=30)
+        try:
+            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=120)
+        except TimeoutError:
+            if process.returncode is None:
+                process.kill()
+            await process.communicate()
+            raise
         assert process.returncode == 0, (stdout + stderr).decode(errors="replace").replace(parsed.password, "***")
 
+    await alembic("upgrade", "0009")
+    engine = create_async_engine(parsed.set(database="migration_check"))
+    async with engine.begin() as connection:
+        await connection.execute(text("""
+            INSERT INTO news_sources
+                (slug, name, url, kind, config, active, priority, trust_score,
+                 vendor_affiliated, interval_hours, cursor, last_new_count, health)
+            VALUES
+                ('retained-source', 'Retained source', 'https://retained.example/feed',
+                 'rss', '{}', true, 75, 80, false, 6,
+                 '{"initial_cutoff_at":"2026-09-15T04:00:00+00:00"}', 7, 'ok')
+        """))
     await alembic("upgrade", "head")
+    async with engine.connect() as connection:
+        retained = (await connection.execute(text(
+            "SELECT slug, active, cursor, last_new_count, profile_id, description, schedule FROM news_sources"
+        ))).mappings().one()
+        assert retained["slug"] == "retained-source" and retained["active"] is True
+        assert retained["cursor"] == {"initial_cutoff_at": "2026-09-15T04:00:00+00:00"}
+        assert retained["last_new_count"] == 7 and retained["profile_id"] is None
+        assert retained["description"] == "" and retained["schedule"]["mode"] == "daily"
+    await engine.dispose()
     await alembic("check")
     await alembic("downgrade", "0001")
     engine = create_async_engine(parsed.set(database="migration_check"))
@@ -67,7 +94,13 @@ async def test_actual_alembic_environment_accepts_special_credentials_offline(pa
         cwd=Path(__file__).resolve().parents[2], env=environment,
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
     )
-    stdout, _ = await asyncio.wait_for(process.communicate(), timeout=30)
+    try:
+        stdout, _ = await asyncio.wait_for(process.communicate(), timeout=120)
+    except TimeoutError:
+        if process.returncode is None:
+            process.kill()
+        await process.communicate()
+        raise
     assert process.returncode == 0, "Alembic rejected a synthetic credential with URL delimiters"
     assert b"CREATE TABLE admin_sessions" in stdout
     assert b"CREATE TABLE subscribers" in stdout

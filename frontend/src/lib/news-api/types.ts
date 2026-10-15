@@ -19,20 +19,20 @@ export interface NewsTaxonomy {
   active: boolean;
 }
 
+export type NewsSourceSchedule =
+  | { mode: "daily"; times: string[] }
+  | { mode: "interval_days"; times: string[]; every_days: number; start_date: string }
+  | { mode: "weekly"; times: string[]; weekdays: number[] };
+
 export interface NewsSource {
   id: number;
   slug: string;
   name: string;
+  description: string;
   url: string;
-  kind: "rss" | "html";
-  config: Record<string, string>;
   active: boolean;
-  priority: number;
-  trust_score: number;
-  vendor_affiliated: boolean;
-  interval_hours: number;
-  topic_ids: number[];
-  category_ids: number[];
+  schedule: NewsSourceSchedule;
+  next_check_at: string | null;
   last_success_at: string | null;
   last_error: string | null;
   last_new_count: number;
@@ -167,8 +167,6 @@ export interface NewsRunItem {
 
 export interface NewsSettings {
   enabled: boolean;
-  timezone: string;
-  schedule: string[];
   editorial_policy: string;
   exclusions: string;
   news_weights: NewsScores;

@@ -46,7 +46,7 @@ export default async function NewsItemsPage({ searchParams }: { searchParams: Pr
       {invalidPeriod && <p id="news-period-error" role="alert" className="admin-error">Начало периода должно быть раньше его окончания или совпадать с ним. Исправьте даты и примените фильтры.</p>}
       <p className="admin-muted">Найдено: {data.total}. Даты указаны в UTC.</p>
       {data.items.length ? <ul className="news-items" aria-label="Подобранные новости">{data.items.map(item => <li key={`${item.id}-${filters.format}`}><NewsItemRow item={item} format={filters.format as NewsFormat || undefined} /></li>)}</ul>
-        : <div className="admin-empty news-stack"><p>{sources.length ? "Материалов по этим фильтрам пока нет. Сбросьте фильтры или запустите сбор." : "Добавьте первый источник и проверьте его, чтобы начать собирать материалы."}</p><Link className="admin-link" prefetch={false} href={sources.length ? "/admin/news/runs" : "/admin/news/sources/new"}>{sources.length ? "Перейти к запускам" : "Добавить источник"}</Link></div>}
+        : <div className="admin-empty news-stack"><p>{sources.length ? "Материалов по этим фильтрам пока нет. Сбросьте фильтры или запустите сбор." : "Включите готовый источник, чтобы начать собирать материалы."}</p><Link className="admin-link" prefetch={false} href={sources.length ? "/admin/news/runs" : "/admin/news/sources"}>{sources.length ? "Перейти к запускам" : "Открыть источники"}</Link></div>}
       <AdminPagination path="/admin/news/items" page={data.page} total={data.total} pages={data.pages ?? Math.ceil(data.total / data.page_size)} params={filters} />
     </section>
   </NewsShell>;

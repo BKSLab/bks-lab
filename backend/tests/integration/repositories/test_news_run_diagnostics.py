@@ -1,7 +1,7 @@
 """Real PostgreSQL stable addresses and historical observation reports."""
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import delete
 
@@ -56,9 +56,11 @@ async def test_concurrent_same_second_job_addresses_and_other_enqueue_paths(sess
     assert {first.slug, second.slug} == {base, f"{base}-2"}
     async with session_factory() as session:
         jobs = NewsJobRepository(session)
-        scheduled = await jobs.enqueue_scheduled("2026-10-15:08:00")
-        assert scheduled.slug == "all-sources-2026-10-15-020405"
-        assert await jobs.enqueue_scheduled("2026-10-15:08:00") is None
+        await NewsSourceRepository(session).update(source.id, {"next_check_at": now - timedelta(days=1)})
+        scheduled, = await jobs.enqueue_due_sources(now=now)
+        assert scheduled.source_id == source.id
+        assert scheduled.slug == f"{base}-3"
+        assert await jobs.enqueue_due_sources(now=now) == []
         repair = await jobs.enqueue_repair(source.id, [7, 8, 9], batch_size=2)
         assert len(repair) == len({job.slug for job in repair}) == 2
         assert [job.slug for job in await jobs.enqueue_repair(source.id, [7, 8, 9], batch_size=2)] == [job.slug for job in repair]

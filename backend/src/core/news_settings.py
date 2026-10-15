@@ -1,10 +1,8 @@
 """Technical configuration for the isolated news scheduler and API facade."""
 
-import re
 from pathlib import Path
 from tempfile import gettempdir
 from urllib.parse import urlsplit
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -18,8 +16,6 @@ class NewsSettings(BaseSettings):
     )
 
     enabled: bool = True
-    timezone: str = "Europe/Samara"
-    schedule: tuple[str, str, str] = ("08:00", "14:00", "20:00")
     http_concurrency: int = Field(default=5, ge=1, le=20)
     http_timeout_seconds: float = Field(default=20, gt=0, le=120)
     http_max_response_bytes: int = Field(default=2 * 1024 * 1024, ge=1024, le=20 * 1024 * 1024)
@@ -53,27 +49,6 @@ class NewsSettings(BaseSettings):
     shutdown_grace_seconds: float = Field(default=30, ge=0, le=300)
     health_file: Path = Field(default_factory=lambda: Path(gettempdir()) / "news-analyzer-health")
     health_max_age_seconds: float = Field(default=120, ge=15, le=3600)
-
-    @field_validator("timezone")
-    @classmethod
-    def validate_timezone(cls, value: str) -> str:
-        """Reject unknown time zones before the scheduler starts."""
-        try:
-            ZoneInfo(value)
-        except (ZoneInfoNotFoundError, ValueError) as error:
-            raise ValueError("Use an installed IANA time zone") from error
-        return value
-
-    @field_validator("schedule")
-    @classmethod
-    def validate_schedule(cls, value: tuple[str, str, str]) -> tuple[str, str, str]:
-        """Keep exactly three distinct daily starts in chronological order."""
-        if len(set(value)) != 3 or any(
-            re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", slot) is None
-            for slot in value
-        ):
-            raise ValueError("Provide three distinct times in HH:MM format")
-        return tuple(sorted(value))
 
     @field_validator("llm_api_url")
     @classmethod

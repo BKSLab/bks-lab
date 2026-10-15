@@ -1,6 +1,7 @@
 """Small news fixtures shared by PostgreSQL and protected API tests."""
 
 from hashlib import sha256
+from uuid import uuid4
 
 from src.repositories.news_sources import NewsSourceRepository
 
@@ -9,6 +10,7 @@ async def add_source(session, name="Example", url="https://example.org/feed.xml"
     return await NewsSourceRepository(session).create(
         {
             "name": name,
+            "profile_id": "fixture-" + uuid4().hex,
             "url": url,
             "kind": "rss",
             "config": {},

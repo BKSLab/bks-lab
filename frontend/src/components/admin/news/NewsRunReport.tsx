@@ -44,7 +44,7 @@ function SourceRun({ run }: { run: NewsRun }) {
   const url = externalNewsUrl(run.source_url);
   return <article className="news-stack news-source-run" aria-labelledby={`news-run-${run.id}`}>
     <header className="news-stack">
-      <h3 id={`news-run-${run.id}`}><Link className="admin-link" prefetch={false} href={`/admin/news/sources/${run.source_slug}`}>{run.source_name}</Link></h3>
+      <h3 id={`news-run-${run.id}`}><a className="admin-link" href={`/admin/news/sources#${run.source_slug}`}>{run.source_name}</a></h3>
       <p className="news-badges"><span className="admin-status">{jobStatusLabels[run.status]}</span><span>{run.source_kind === "rss" ? "RSS / Atom" : "HTML"}</span>{run.http_status !== null && <span>HTTP {run.http_status}</span>}</p>
       {url && <a className="admin-link news-source-url" href={url} target="_blank" rel="noopener noreferrer">{run.source_url}<span className="sr-only"> (в новой вкладке)</span></a>}
     </header>
@@ -65,7 +65,7 @@ function RunItem({ item }: { item: NewsRunItem }) {
   return <article className="news-stack news-observation" aria-labelledby={`news-observation-${item.id}`}>
     <header className="news-stack">
       <h3 id={`news-observation-${item.id}`}>{item.item_id ? <Link className="admin-link" prefetch={false} href={`/admin/news/items/${item.item_id}`}>{item.title || "Публикация без заголовка"}</Link> : item.title || "Публикация без заголовка"}</h3>
-      <p className="news-item-meta"><Link className="admin-link" prefetch={false} href={`/admin/news/sources/${item.source_slug}`}>{item.source_name}</Link></p>
+      <p className="news-item-meta"><a className="admin-link" href={`/admin/news/sources#${item.source_slug}`}>{item.source_name}</a></p>
       <p className="news-badges"><span className="admin-status">{runOutcomeLabels[item.outcome]}</span>{item.stage && <span>Этап: {stages[item.stage] ?? "Обработка публикации"}</span>}</p>
       {url && <a className="admin-link news-original" href={url} target="_blank" rel="noopener noreferrer">Первоисточник<span className="sr-only">: {item.title} (в новой вкладке)</span></a>}
     </header>

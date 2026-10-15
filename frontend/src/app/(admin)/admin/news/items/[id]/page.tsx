@@ -21,7 +21,7 @@ export default async function NewsItemPage({ params }: { params: Promise<{ id: s
   const item = await adminFetch<NewsItemDetail>(`/news/items/${id}`);
   return <NewsShell username={user.username} current="items" title={item.title}>
     <div className="news-actions"><Link className="admin-link" prefetch={false} href="/admin/news/items">К подборкам</Link><a className="admin-link" href={externalNewsUrl(item.url)} target="_blank" rel="noopener noreferrer">Открыть первоисточник<span className="sr-only"> (в новой вкладке)</span></a></div>
-    <dl className="admin-details"><dt>Источник</dt><dd><Link className="admin-link" prefetch={false} href={`/admin/news/sources/${item.source_slug}`}>{item.source_name}</Link></dd><dt>Дата публикации</dt><dd>{adminDate(item.published_at, true)}{item.published_at && " UTC"}</dd><dt>Впервые найден</dt><dd>{adminDate(item.first_seen_at, true)} UTC</dd><dt>Последний обход</dt><dd>{adminDate(item.last_seen_at, true)} UTC</dd></dl>
+    <dl className="admin-details"><dt>Источник</dt><dd><a className="admin-link" href={`/admin/news/sources#${item.source_slug}`}>{item.source_name}</a></dd><dt>Дата публикации</dt><dd>{adminDate(item.published_at, true)}{item.published_at && " UTC"}</dd><dt>Впервые найден</dt><dd>{adminDate(item.first_seen_at, true)} UTC</dd><dt>Последний обход</dt><dd>{adminDate(item.last_seen_at, true)} UTC</dd></dl>
     {item.duplicate_of_id && <p className="admin-muted">Совпадает с <Link className="admin-link" prefetch={false} href={`/admin/news/items/${item.duplicate_of_id}`}>другим сохранённым материалом</Link>.</p>}
     <section className="admin-section news-stack" aria-labelledby="news-analysis-heading"><h2 id="news-analysis-heading">Редакционный анализ</h2>
       <NewsAnalysisStatus item={item} />

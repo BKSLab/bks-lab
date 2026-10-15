@@ -7,8 +7,8 @@ export const newsDecision: NewsDecision = {
 export const newsTopic: NewsTaxonomy = { id: 1, name: "AI Engineering", description: "Практическая разработка", active: true };
 export const newsCategory: NewsTaxonomy = { id: 2, name: "Исследования", description: "Новые результаты", active: true };
 export const newsSource: NewsSource = {
-  id: 7, slug: "tehnicheskiy-blog", name: "Технический блог", url: "https://example.org/feed.xml", kind: "rss", config: {}, active: false,
-  priority: 50, trust_score: 70, vendor_affiliated: false, interval_hours: 8, topic_ids: [1], category_ids: [2],
+  id: 7, slug: "tehnicheskiy-blog", name: "Технический блог", description: "Практика современной разработки и исследования AI.", url: "https://example.org/feed.xml", active: false,
+  schedule: { mode: "daily", times: ["08:00", "20:00"] }, next_check_at: null,
   last_success_at: null, last_error: null, last_new_count: 0, health: "unknown",
 };
 export const newsAnalysis: NewsAnalysis = {
@@ -48,7 +48,7 @@ export const newsRunItem: NewsRunItem = {
   stage: "storage", preserved_previous: false, analysis_status: "completed", analysis_reason: null, analysis_job_slug: "analiz-materiala-20261008-080005",
 };
 export const newsSettings: NewsSettings = {
-  enabled: true, timezone: "Europe/Samara", schedule: ["08:00", "14:00", "20:00"], editorial_policy: "AI и современная разработка", exclusions: "Рекламные обещания",
+  enabled: true, editorial_policy: "AI и современная разработка", exclusions: "Рекламные обещания",
   news_weights: { topical_fit: 40, significance: 25, freshness: 25, article_potential: 10 },
   article_weights: { topical_fit: 35, significance: 25, freshness: 10, article_potential: 30 },
   initial_lookback_days: 30, max_items_per_source: 50, max_excerpt_chars: 3000, analysis_batch_size: 20, text_retention_days: 90, history_retention_days: 180,

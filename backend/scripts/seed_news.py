@@ -1,9 +1,8 @@
-"""Seed missing source suggestions and taxonomy: python -m scripts.seed_news."""
+"""Synchronize supported source profiles and taxonomy: python -m scripts.seed_news."""
 
 import asyncio
-import json
 import sys
-from pathlib import Path
+from collections.abc import Sequence
 
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -11,8 +10,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from src.db.session import async_session_factory, engine
 from src.exceptions.news import NewsRepositoryError
 from src.repositories.news_catalog import NewsCatalogRepository
-from src.repositories.news_source_catalogue import NewsSourceCatalogueRepository
-from src.schemas.news_source_catalogue import SourceCatalogueEntry
+from src.news_sources import SourceProfile, get_source_profiles
+from src.repositories.news_sources import NewsSourceRepository
 
 CATEGORIES = [
     "AI Engineering / Разработка с ИИ",
@@ -44,23 +43,19 @@ TOPICS = [
 ]
 
 
-def load_source_catalogue() -> list[SourceCatalogueEntry]:
-    """Validate bundled seed data before any database writes."""
-    path = Path(__file__).resolve().parents[1] / "src/data/news_source_catalogue.json"
-    entries = [
-        SourceCatalogueEntry.model_validate(entry)
-        for entry in json.loads(path.read_text(encoding="utf-8"))
-    ]
-    if len({entry.id for entry in entries}) != len(entries):
-        raise ValueError("Source catalogue IDs must be unique")
-    return entries
+def load_source_profiles() -> tuple[SourceProfile, ...]:
+    """Read the verified code registry without making network requests."""
+    return get_source_profiles()
 
 
 async def seed_news(
     session_factory: async_sessionmaker[AsyncSession],
-    entries: list[SourceCatalogueEntry],
+    profiles: Sequence[SourceProfile],
 ) -> dict[str, int]:
-    """Insert missing defaults, preserving catalogue edits and connected sources."""
+    """Sync code-owned metadata, retaining user calendars, enablement and history."""
+    for field in ("id", "slug", "url"):
+        if len({getattr(profile, field) for profile in profiles}) != len(profiles):
+            raise ValueError(f"Source profile {field} values must be unique")
     async with session_factory() as session:
         catalog = NewsCatalogRepository(session)
         categories = await catalog.seed(
@@ -71,24 +66,27 @@ async def seed_news(
             "topics",
             [{"name": name, "description": "", "active": True} for name in TOPICS],
         )
-        suggestions = await NewsSourceCatalogueRepository(session).seed([
+        sources = await NewsSourceRepository(session).synchronize_profiles([
             {
-                "id": entry.id, "position": position,
-                "data": entry.model_dump(by_alias=True),
+                "profile_id": profile.id, "slug": profile.slug,
+                "name": profile.name, "description": profile.description,
+                "url": profile.url, "kind": profile.kind, "config": profile.config,
+                "priority": profile.priority, "trust_score": profile.trust_score,
+                "vendor_affiliated": profile.vendor_affiliated,
+                "schedule": profile.default_schedule,
             }
-            for position, entry in enumerate(entries)
+            for profile in profiles
         ])
-    return {"catalogue": suggestions, "categories": categories, "topics": topics}
+    return {"sources": len(sources), "categories": categories, "topics": topics}
 
 
 async def main() -> None:
-    """Fill only missing rows at startup and report insertion counts."""
+    """Synchronize the supported registry and report taxonomy additions."""
     try:
-        counts = await seed_news(async_session_factory, load_source_catalogue())
+        counts = await seed_news(async_session_factory, load_source_profiles())
         print(
-            "News seed added: "
-            f"{counts['catalogue']} catalogue entries, "
-            f"{counts['categories']} categories, {counts['topics']} topics"
+            f"News seed synchronized: {counts['sources']} supported sources; "
+            f"added {counts['categories']} categories, {counts['topics']} topics"
         )
     finally:
         await engine.dispose()
