@@ -5,11 +5,9 @@ import type { ArticleSummary, Paged } from "@/lib/api/types";
 export function ArticleResults({
   data,
   base,
-  query,
 }: {
   data: Paged<ArticleSummary>;
   base: string;
-  query?: string;
 }) {
   return (
     <>
@@ -20,16 +18,13 @@ export function ArticleResults({
       </div>
       {!data.items.length && (
         <p className="empty-state">
-          {query
-            ? "Ничего не найдено. Попробуйте другое слово или сбросьте поиск."
-            : "В этом разделе пока нет статей."}
+          В этом разделе пока нет статей.
         </p>
       )}
       <Pagination
         base={base}
         page={data.page}
         pages={data.pages}
-        query={query}
       />
     </>
   );

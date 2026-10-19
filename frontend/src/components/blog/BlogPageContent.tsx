@@ -1,13 +1,10 @@
-import { Suspense } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Container } from "@/components/layout/Container";
 import { Breadcrumbs } from "@/components/content/Breadcrumbs";
-import { NotePreview } from "@/components/content/Cards";
-import { PublicForm } from "@/components/forms/PublicForm";
 import { AdSlot } from "@/components/ads/AdSlot";
-import { getArticles, getCategories, getLatestNotes } from "@/lib/api";
+import { getArticles } from "@/lib/api";
 import {
   ARTICLE_PAGE_SIZE,
   CATEGORY_TITLES,
@@ -15,7 +12,6 @@ import {
   pageMetadata,
 } from "@/lib/content";
 import { ArticleResults } from "./ArticleResults";
-import { BlogSearch } from "./BlogSearch";
 
 export const BLOG_DESCRIPTION =
   "Размышления, опыт и практические материалы о разработке, управлении и искусственном интеллекте.";
@@ -41,11 +37,7 @@ export async function BlogPageContent({
   category?: string;
 }) {
   if (category && !Object.hasOwn(CATEGORY_TITLES, category)) notFound();
-  const [articles, categories, notes] = await Promise.all([
-    getArticles({ page, pageSize: ARTICLE_PAGE_SIZE, category }),
-    getCategories(),
-    getLatestNotes(3),
-  ]);
+  const articles = await getArticles({ page, pageSize: ARTICLE_PAGE_SIZE, category });
   if (page > 1 && page > articles.pages) notFound();
   const base = category ? `/blog/${category}` : "/blog";
   const title = category ? CATEGORY_TITLES[category] : "Блог";
@@ -111,52 +103,15 @@ export async function BlogPageContent({
       </nav>
       <div className="blog-columns">
         <section aria-label="Статьи" className="min-w-0">
-          <Suspense fallback={<ArticleResults data={articles} base={base} />}>
-            <BlogSearch initial={articles} base={base} category={category} />
-          </Suspense>
+          <p className="mb-6 text-sm text-text-muted">
+            Статей в разделе: {articles.total}
+          </p>
+          <ArticleResults data={articles} base={base} />
         </section>
         <aside
           aria-label="Дополнительно о блоге"
           className="min-w-0 space-y-10"
         >
-          <section className="rounded-card border border-border bg-surface p-6">
-            <h2 className="mb-4 text-xl font-semibold">Подписка</h2>
-            <PublicForm kind="newsletter" />
-          </section>
-          <section>
-            <h2 className="mb-4 text-xl font-semibold">Популярные темы</h2>
-            <ul>
-              {(categories.length
-                ? categories
-                : Object.entries(CATEGORY_TITLES).map(([slug, name]) => ({
-                    slug,
-                    title: name,
-                    articles_count: 0,
-                  }))
-              ).map((item) => (
-                <li key={item.slug}>
-                  <Link
-                    className="flex min-h-11 items-center justify-between gap-3 border-b border-border py-2 hover:text-accent hover:underline"
-                    href={`/blog/${item.slug}`}
-                  >
-                    <span>{item.title}</span>
-                    <span className="font-mono text-sm text-text-muted">
-                      {item.articles_count}
-                    </span>
-                  </Link>
-                </li>
-              ))}
-            </ul>
-          </section>
-          <section>
-            <h2 className="mb-4 text-xl font-semibold">Заметки на полях</h2>
-            {notes.map((note) => (
-              <NotePreview key={note.slug} note={note} />
-            ))}
-            <Link href="/notes" className="text-link">
-              Все заметки →
-            </Link>
-          </section>
           <blockquote className="border-l-2 border-accent pl-5">
             <p className="text-lg">
               Лучшие решения рождаются на стыке технологий, людей и реальных

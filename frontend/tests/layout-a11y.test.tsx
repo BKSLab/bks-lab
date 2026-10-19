@@ -64,7 +64,7 @@ describe("AppHeader", () => {
     expect(
       screen.getByRole("link", { name: "BKS Lab — на главную" }),
     ).toBeTruthy();
-    expect(screen.getByRole("link", { name: "Поиск по блогу" })).toBeTruthy();
+    expect(screen.queryByRole("link", { name: "Поиск по блогу" })).toBeNull();
     expect(
       screen.getByRole("button", { name: "Переключить на тёмную тему" }),
     ).toBeTruthy();

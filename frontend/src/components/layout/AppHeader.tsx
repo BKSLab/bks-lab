@@ -5,7 +5,6 @@ import { BrandLogo } from "@/components/layout/BrandLogo";
 import { ArrowRightIcon } from "@/components/ui/icons";
 import { MainNavigation } from "@/components/navigation/MainNavigation";
 import { MobileNavigation } from "@/components/navigation/MobileNavigation";
-import { SearchButton } from "@/components/navigation/SearchButton";
 import { ThemeToggle } from "@/components/navigation/ThemeToggle";
 
 export function AppHeader() {
@@ -21,7 +20,6 @@ export function AppHeader() {
         </Link>
         <MainNavigation className="hidden min-w-0 max-w-full desktop:block" />
         <div className="flex max-w-full flex-wrap items-center gap-1">
-          <SearchButton />
           <ThemeToggle />
           <Link
             href="/contacts"

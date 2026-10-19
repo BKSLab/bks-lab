@@ -5,7 +5,9 @@ import { ArticleMeta, Tags } from "@/components/content/Cards";
 import { ContentHtml } from "@/components/content/ContentHtml";
 import { Container } from "@/components/layout/Container";
 import { AdSlot } from "@/components/ads/AdSlot";
+import { RelatedArticles } from "@/components/blog/RelatedArticles";
 import { getArticle, getArticles } from "@/lib/api";
+import { getRelatedArticles } from "@/lib/api/related-articles";
 import {
   absoluteUrl,
   CATEGORY_TITLES,
@@ -51,6 +53,7 @@ export async function generateMetadata({ params }: Props) {
 
 export default async function ArticlePage({ params }: Props) {
   const article = await getArticle((await params).slug);
+  const related = await getRelatedArticles(article);
   const category = CATEGORY_TITLES[article.category] ?? article.category;
   const path = `/blog/post/${article.slug}`;
   const structuredData = [
@@ -125,6 +128,7 @@ export default async function ArticlePage({ params }: Props) {
           </Link>
         </footer>
       </article>
+      <RelatedArticles articles={related} />
       <AdSlot placement="article-end" height={328} className="mx-auto mt-12 max-w-[72ch]" />
       <script
         type="application/ld+json"
