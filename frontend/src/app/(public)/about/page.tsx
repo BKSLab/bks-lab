@@ -30,6 +30,11 @@ const socialLinks = [
     description: "Мой блог",
     href: "https://dzen.ru/bks_daily",
   },
+  {
+    title: "Telegram",
+    description: "Написать лично",
+    href: "https://t.me/Kirill_Barabanshchikov",
+  },
 ];
 
 export default function AboutPage() {
@@ -318,7 +323,7 @@ export default function AboutPage() {
                   </a>
                 </li>
               </ul>
-              <ul className="mt-6 grid gap-3 md:grid-cols-3">
+              <ul className="mt-6 grid gap-3 md:grid-cols-2">
                 {socialLinks.map((social) => (
                   <li key={social.href} className="min-w-0">
                     <a

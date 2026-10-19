@@ -27,6 +27,11 @@ const socialLinks = [
     description: "Мой блог",
     href: "https://dzen.ru/bks_daily",
   },
+  {
+    title: "Telegram",
+    description: "Написать лично",
+    href: "https://t.me/Kirill_Barabanshchikov",
+  },
 ];
 
 export default function ContactsPage() {
