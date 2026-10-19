@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@/lib/api", () => ({ getArticles: vi.fn() }));
+vi.mock("@/lib/api", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@/lib/api")>(),
+  getArticles: vi.fn(),
+}));
 
 import { getArticles } from "@/lib/api";
 import { getRelatedArticles } from "@/lib/api/related-articles";
@@ -17,7 +20,9 @@ function paged(items: ArticleSummary[], page: number, pages: number): Paged<Arti
   return { items, page, pages, page_size: 50, total: pages * 50 };
 }
 
-beforeEach(() => vi.mocked(getArticles).mockReset());
+beforeEach(() => {
+  vi.mocked(getArticles).mockReset();
+});
 
 describe("related articles", () => {
   it("scans beyond the first page, matches any tag, deduplicates and preserves date order", async () => {
@@ -51,5 +56,12 @@ describe("related articles", () => {
 
     expect(await getRelatedArticles(article("current", ["AI"]))).toEqual([]);
     expect(getArticles).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not hide unexpected programming errors", async () => {
+    const error = new TypeError("Unexpected implementation error");
+    vi.mocked(getArticles).mockRejectedValue(error);
+
+    await expect(getRelatedArticles(article("current", ["AI"]))).rejects.toBe(error);
   });
 });

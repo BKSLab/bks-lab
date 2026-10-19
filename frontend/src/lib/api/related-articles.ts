@@ -1,5 +1,5 @@
-import { getArticles } from "@/lib/api";
-import type { ArticleSummary } from "./types";
+import { ApiError, getArticles } from "@/lib/api";
+import type { ArticleSummary, Paged } from "./types";
 
 const RELATED_ARTICLE_LIMIT = 3;
 const ARTICLE_SCAN_PAGE_SIZE = 50;
@@ -16,7 +16,13 @@ export async function getRelatedArticles(
 
   // The API has no tag filter. Scan its date-ordered pages until enough match.
   while (true) {
-    const data = await getArticles({ page, pageSize: ARTICLE_SCAN_PAGE_SIZE });
+    let data: Paged<ArticleSummary>;
+    try {
+      data = await getArticles({ page, pageSize: ARTICLE_SCAN_PAGE_SIZE });
+    } catch (error) {
+      if (error instanceof ApiError) return related;
+      throw error;
+    }
     for (const candidate of data.items) {
       if (seen.has(candidate.slug) || !candidate.tags.some((tag) => tags.has(tag))) {
         continue;

@@ -6,11 +6,15 @@ import { axe } from "vitest-axe";
 vi.mock("next/navigation", () => ({
   notFound: vi.fn(() => { throw new Error("NEXT_NOT_FOUND"); }),
 }));
-vi.mock("@/lib/api", () => ({ getArticle: vi.fn(), getArticles: vi.fn() }));
+vi.mock("@/lib/api", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@/lib/api")>(),
+  getArticle: vi.fn(),
+  getArticles: vi.fn(),
+}));
 
 import ArticlePage from "@/app/(public)/blog/post/[slug]/page";
 import { BlogPageContent } from "@/components/blog/BlogPageContent";
-import { getArticle, getArticles } from "@/lib/api";
+import { ApiError, getArticle, getArticles } from "@/lib/api";
 import type { ArticleDetail, ArticleSummary } from "@/lib/api/types";
 
 const article: ArticleDetail = {
@@ -60,6 +64,17 @@ describe("blog views", () => {
   it("hides the related section when there are no matching articles", async () => {
     vi.mocked(getArticles).mockResolvedValue({ items: [article], total: 1, page: 1, page_size: 50, pages: 1 });
     render(await ArticlePage({ params: Promise.resolve({ slug: article.slug }) }));
+    expect(screen.queryByRole("region", { name: "Похожие статьи" })).toBeNull();
+  });
+
+  it.each([
+    new ApiError("List unavailable", { status: 503 }),
+    new ApiError("List timed out", { timedOut: true }),
+  ])("keeps an available article readable when the optional list request fails: %s", async (error) => {
+    vi.mocked(getArticles).mockRejectedValue(error);
+    render(await ArticlePage({ params: Promise.resolve({ slug: article.slug }) }));
+    expect(screen.getByRole("heading", { level: 1, name: article.title })).toBeTruthy();
+    expect(screen.getByText("Текст открытой статьи.")).toBeTruthy();
     expect(screen.queryByRole("region", { name: "Похожие статьи" })).toBeNull();
   });
 });
