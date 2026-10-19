@@ -140,23 +140,6 @@ export async function HomeContent() {
           </Link>
         </aside>
       </Container>
-      <section className="statement dark-panel">
-        <Container>
-          <div className="statement-inner">
-            <blockquote className="max-w-3xl border-l-2 border-accent pl-6 md:pl-10">
-              <p className="text-3xl leading-snug font-semibold md:text-4xl">
-                Технологии ценны, когда они делают жизнь людей лучше.
-              </p>
-              <footer className="mt-6 font-mono text-sm text-accent">
-                — BKS Lab
-              </footer>
-            </blockquote>
-            <Link href="/about" className="button-secondary shrink-0">
-              Обо мне <ArrowRightIcon className="h-4 w-4" />
-            </Link>
-          </div>
-        </Container>
-      </section>
     </>
   );
 }

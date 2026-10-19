@@ -58,7 +58,6 @@ export default function AboutPage() {
                 height={4080}
                 sizes="(min-width: 1280px) 467px, (min-width: 768px) 40vw, calc(100vw - 32px)"
                 eager
-                className="md:sticky md:top-28"
               />
             )}
             <div className="min-w-0 max-w-3xl">
